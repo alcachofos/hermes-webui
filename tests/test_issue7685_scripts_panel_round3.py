@@ -408,7 +408,6 @@ def test_non_slug_names_stay_readable(tmp_path, monkeypatch):
         "../escape.py",
         "a/b.py",
         "a\\b.py",
-        ".hidden.py",
         "nul\x00byte.py",
         "ctrl\x01char.py",
     ],
@@ -419,6 +418,122 @@ def test_traversal_and_control_names_are_still_refused(name: str) -> None:
     assert mod._is_safe_script_name(name) is False, (
         f"{name!r} must still be refused by the containment guard"
     )
+
+
+def test_dotfile_scripts_are_listed_and_readable(tmp_path, monkeypatch) -> None:
+    """#7685 re-gate: a leading dot was a filename POLICY rejection wearing the
+    containment guard's clothes.
+
+    ``.hidden.py`` is a script the installed Agent runs like any other, so the
+    panel dropping it made the file look like it did not exist. Only the ``.``
+    and ``..`` directory entries are traversal, and they stay refused.
+    """
+    mod = _scripts_module()
+    (tmp_path / ".hidden.py").write_text("print('hidden')\n", encoding="utf-8")
+    (tmp_path / "plain.py").write_text("print('plain')\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "scripts_dir", lambda: tmp_path)
+
+    assert mod._is_safe_script_name(".hidden.py") is True
+    assert mod._is_safe_script_name(".") is False
+    assert mod._is_safe_script_name("..") is False
+
+    listed = [s["name"] for s in mod.list_scripts()["scripts"]]
+    assert ".hidden.py" in listed, f"the dotfile was dropped from the list: {listed}"
+    assert "plain.py" in listed
+
+    result = mod.read_script(".hidden.py")
+    assert result is not None, "the dotfile was refused by the name guard"
+    assert result.get("content") == "print('hidden')\n"
+
+
+def test_size_reports_the_bytes_actually_read_when_the_file_grew(tmp_path, monkeypatch) -> None:
+    """#7685 re-gate: `size` came from the ``fstat`` at open time.
+
+    A file that grew before the read returned post-growth content beside its
+    pre-growth length, so the panel's byte count contradicted the text it was
+    showing.
+    """
+    mod = _scripts_module()
+    target = tmp_path / "grow.py"
+    target.write_text("print('a')\\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "scripts_dir", lambda: tmp_path)
+    stale_size = target.stat().st_size
+
+    real_read = mod._read_bounded
+
+    def read_after_growth(fd, limit):
+        # Grow the SAME inode after the descriptor was opened (and stat'ed).
+        target.write_text("print('a')\\nprint('b')\\n", encoding="utf-8")
+        return real_read(fd, limit)
+
+    monkeypatch.setattr(mod, "_read_bounded", read_after_growth)
+
+    result = mod.read_script("grow.py")
+    assert result is not None
+    assert result["content"] == "print('a')\\nprint('b')\\n"
+    assert result["size"] == len(result["content"].encode("utf-8"))
+    assert result["size"] > stale_size, (
+        "size still reports the pre-growth length next to post-growth content"
+    )
+
+
+class _RawHandler:
+    """Minimal BaseHTTPRequestHandler stand-in for routes.handle_get."""
+
+    def __init__(self) -> None:
+        self.status = None
+        self.sent_headers = []
+        self.body = bytearray()
+        self.wfile = self
+
+    def send_response(self, code):
+        self.status = code
+
+    def send_header(self, key, value):
+        self.sent_headers.append((key, value))
+
+    def end_headers(self):
+        pass
+
+    def write(self, data):
+        self.body.extend(
+            data if isinstance(data, (bytes, bytearray)) else data.encode("utf-8")
+        )
+
+
+def _call_scripts_raw(monkeypatch, name: str, result):
+    from urllib.parse import urlparse
+
+    from api import routes
+    from api import scripts_panel
+
+    monkeypatch.setattr(scripts_panel, "read_script", lambda _name: result)
+    handler = _RawHandler()
+    routes.handle_get(handler, urlparse(f"/api/scripts/raw?name={name}"))
+    return handler
+
+
+def test_read_error_does_not_come_back_as_http_200(monkeypatch) -> None:
+    """#7685 re-gate: a failed read used to travel as a 200 with an ``error``
+    body, so an unreadable script looked like a successful empty preview."""
+    handler = _call_scripts_raw(
+        monkeypatch,
+        "flaky.py",
+        {"name": "flaky.py", "error": "read_failed", "detail": "OSError: boom"},
+    )
+    assert handler.status == 500, (
+        f"a failed read must not be reported as success (got {handler.status})"
+    )
+
+
+def test_successful_read_still_comes_back_as_http_200(monkeypatch) -> None:
+    """The counterpart: a good read keeps the 200 the panel expects."""
+    handler = _call_scripts_raw(
+        monkeypatch,
+        "plain.py",
+        {"name": "plain.py", "content": "print('x')\\n", "size": 11},
+    )
+    assert handler.status == 200
 
 
 def test_the_whitelist_regex_is_gone_from_the_name_guard() -> None:

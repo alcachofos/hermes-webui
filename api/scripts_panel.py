@@ -51,11 +51,16 @@ def _is_safe_script_name(name: str) -> bool:
     """Containment guard for a script name coming from outside this module.
 
     Rejects empty, over-long, path separators, NUL, control characters and the
-    dot entries. This is a SECURITY boundary, not a filename policy: a script
-    the installed Agent will run must not disappear from the panel because its
-    name is not a URL slug (#7685 finding 3). ``my job.py`` and ``résumé.sh``
+    ``.`` / ``..`` entries. This is a SECURITY boundary, not a filename policy: a
+    script the installed Agent will run must not disappear from the panel because
+    its name is not a URL slug (#7685 finding 3). ``my job.py`` and ``résumé.sh``
     are perfectly good scripts, so anything that survives the traversal checks
     below is accepted and the transport encodes it.
+
+    A leading dot is NOT a policy rejection either (#7685 re-gate): the Agent
+    runs ``.hidden.py`` like any other script, and the panel dropping it made
+    the dotfile look like it did not exist. Only the ``.`` and ``..`` directory
+    entries are refused, because those are traversal, not filenames.
 
     The checks are ordered cheapest-first and every one of them is a traversal
     or control-character test — never a character-class whitelist.
@@ -65,10 +70,6 @@ def _is_safe_script_name(name: str) -> bool:
     if "/" in name or "\\" in name or "\0" in name:
         return False
     if name in (".", ".."):
-        return False
-    # A leading dot would hide the entry from the Agent's own conventions and
-    # from a plain directory listing, so it is not a runnable script name.
-    if name.startswith("."):
         return False
     # Control characters have no business in a filename and would corrupt the
     # HTTP response that carries it.
@@ -405,10 +406,14 @@ def read_script(name: str) -> dict | None:
                 "size": st.st_size,
             }
         content = res.content.decode("utf-8", errors="replace")
+        # #7685 re-gate: `size` must describe what we actually read. A file that
+        # grew between the open (where fstat happened) and the read returned
+        # post-growth content next to its pre-growth length.
+        observed_size = max(st.st_size, len(res.content))
         return {
             "name": name,
             "content": content,
-            "size": st.st_size,
+            "size": observed_size,
             "modified": int(st.st_mtime),
             "too_large": False,
             "truncated": res.truncated,

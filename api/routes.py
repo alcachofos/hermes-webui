@@ -15531,6 +15531,15 @@ def handle_get(handler, parsed) -> bool:
         result = read_script(name)
         if result is None:
             return bad(handler, "script not found", 404)
+        # #7685 re-gate: a failed read is not a success. A 200 here made an
+        # unreadable script look like an empty one in the panel, which keys its
+        # error state off the status.
+        if result.get("error"):
+            return bad(
+                handler,
+                result.get("detail") or result["error"],
+                500,
+            )
         return j(handler, result)
 
     if parsed.path == "/api/crons/output":
