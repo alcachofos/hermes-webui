@@ -1132,7 +1132,7 @@ async function loadScriptsList(animate, silent){
   }catch(_e){
     // Late reply for a superseded owner/generation, or a silent background
     // refresh: do not paint either way.
-    if(!_scriptsReplyIsCurrent(owner,gen,seq)) return;
+    if(!_scriptsReplyIsCurrent(owner,gen,seq)){ box.style.opacity=''; return; }
     if(animate) box.style.opacity='';
     if(!silent){
       box.innerHTML=`<div style="padding:12px;color:var(--muted);font-size:12px">${esc(t('scripts_load_failed')||'Could not load scripts.')}</div>`;
@@ -1141,21 +1141,24 @@ async function loadScriptsList(animate, silent){
   }
   // Stale-owner guard: a profile switch (or a newer request) superseded this
   // one while it was in flight. Publishing would overwrite the current
-  // owner's result with the previous profile's scripts (or an error).
-  if(!_scriptsReplyIsCurrent(owner,gen,seq)) return;
+  // owner's result with the previous profile's scripts (or an error). The
+  // dim must clear even when the reply is refused, or a held reply leaves
+  // the pane stuck at half opacity (#7685 opacity fix).
+  if(!_scriptsReplyIsCurrent(owner,gen,seq)){ box.style.opacity=''; return; }
   if(animate) box.style.opacity='';
+  const dirCaption=data.directory?`<div class="scripts-dir-caption">${esc(data.directory)}</div>`:'';
   if(!data.exists){
     box.innerHTML=`<div style="padding:12px;color:var(--muted);font-size:12px">${esc(t('scripts_no_directory')||'No scripts directory yet.')}</div>`;
     _scriptsLastDir=null;
     return;
   }
   if(!data.scripts.length){
-    box.innerHTML=`<div style="padding:12px;color:var(--muted);font-size:12px">${esc(t('scripts_empty')||'No scripts in this profile yet.')}</div>`;
+    box.innerHTML=dirCaption+`<div style="padding:12px;color:var(--muted);font-size:12px">${esc(t('scripts_empty')||'No scripts in this profile yet.')}</div>`;
     _scriptsLastDir=data.directory||null;
     return;
   }
   _scriptsLastDir=data.directory||null;
-  box.innerHTML=data.scripts.map(s=>_renderScriptItem(s)).join('');
+  box.innerHTML=dirCaption+data.scripts.map(s=>_renderScriptItem(s)).join('');
 }
 
 function _renderScriptItem(s){
@@ -1164,7 +1167,7 @@ function _renderScriptItem(s){
   const size=s.size!=null?`<span class="scripts-item-size">${_formatScriptSize(s.size)}</span>`:'';
   return `<div class="scripts-item" data-script-name="${name}">
     <div class="scripts-item-head">
-      <span class="scripts-item-name">${name}</span>
+      <span class="scripts-item-name" title="${name}">${name}</span>
       ${size}
     </div>
     ${desc}
@@ -1182,6 +1185,17 @@ let _currentTasksSubtab='jobs';
 function switchTasksSubtab(name){
   if(name!=='jobs'&&name!=='scripts') return;
   _currentTasksSubtab=name;
+  // Attribute gate for the jobs-only gateway notice: the notice sets an
+  // inline `display`, so CSS hides it on the Scripts tab via the attribute
+  // selector (#7685 UX review).
+  const panel=$('panelTasks');
+  if(panel) panel.dataset.tasksSubtab=name;
+  const titleEl=$('tasksPanelTitle');
+  if(titleEl){
+    const titleKey=name==='scripts'?'cron_tab_scripts':'scheduled_jobs';
+    titleEl.setAttribute('data-i18n',titleKey);
+    titleEl.textContent=t(titleKey)||(name==='scripts'?'Scripts':'Scheduled jobs');
+  }
   const jobsBtn=$('tasksTabJobs');
   const scriptsBtn=$('tasksTabScripts');
   if(jobsBtn) jobsBtn.classList.toggle('active',name==='jobs');
@@ -1193,6 +1207,13 @@ function switchTasksSubtab(name){
   if(cronList) cronList.hidden=(name!=='jobs');
   if(scriptsList) scriptsList.hidden=(name!=='scripts');
   if(name==='scripts') loadScriptsList(true);
+}
+
+// The panel Refresh button reloads whatever subtab is active (#7685 UX
+// review must-fix 3): Scripts refreshes the script list, Jobs the cron list.
+function refreshTasksPanel(){
+  if(_currentTasksSubtab==='scripts') loadScriptsList(true);
+  else loadCrons(true);
 }
 
 async function loadCrons(animate) {
