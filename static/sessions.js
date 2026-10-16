@@ -6410,6 +6410,13 @@ document.addEventListener('scroll',e=>{
       closeSessionActionMenu();
       return;
     }
+    // Right-click menus sit at the pointer. Re-anchoring them to the row on
+    // sidebar scroll jumps the menu off the click, so close those instead.
+    // Button-opened menus stay glued to the row (#5347).
+    if(_sessionActionPointer){
+      closeSessionActionMenu();
+      return;
+    }
     _positionSessionActionMenu(_sessionActionAnchor);
     return;
   }
