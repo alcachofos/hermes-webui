@@ -1125,14 +1125,19 @@ async function loadScriptsList(animate, silent){
   const owner=_scriptsOwnerKey();
   const gen=_scriptsInvalidateSeq;
   const seq=++_scriptsRequestSeq;
-  if(animate&&box) box.style.opacity='0.5';
+  // The dim belongs to the NEWEST request, whichever one that is. Setting it
+  // only on the animate arm let a superseded request's late reply clear a
+  // newer request's dim (or leave a held request stuck at half opacity when
+  // the newer refresh never animated). A stale reply must return without
+  // touching opacity — the newest request owns it (#7685 opacity fix).
+  if(box) box.style.opacity=animate?'0.5':'';
   let data;
   try{
     data=await api('/api/scripts/list');
   }catch(_e){
     // Late reply for a superseded owner/generation, or a silent background
     // refresh: do not paint either way.
-    if(!_scriptsReplyIsCurrent(owner,gen,seq)){ box.style.opacity=''; return; }
+    if(!_scriptsReplyIsCurrent(owner,gen,seq)){ return; }
     if(animate) box.style.opacity='';
     if(!silent){
       box.innerHTML=`<div style="padding:12px;color:var(--muted);font-size:12px">${esc(t('scripts_load_failed')||'Could not load scripts.')}</div>`;
@@ -1141,10 +1146,8 @@ async function loadScriptsList(animate, silent){
   }
   // Stale-owner guard: a profile switch (or a newer request) superseded this
   // one while it was in flight. Publishing would overwrite the current
-  // owner's result with the previous profile's scripts (or an error). The
-  // dim must clear even when the reply is refused, or a held reply leaves
-  // the pane stuck at half opacity (#7685 opacity fix).
-  if(!_scriptsReplyIsCurrent(owner,gen,seq)){ box.style.opacity=''; return; }
+  // owner's result with the previous profile's scripts (or an error).
+  if(!_scriptsReplyIsCurrent(owner,gen,seq)){ return; }
   if(animate) box.style.opacity='';
   const dirCaption=data.directory?`<div class="scripts-dir-caption">${esc(data.directory)}</div>`:'';
   if(!data.exists){
