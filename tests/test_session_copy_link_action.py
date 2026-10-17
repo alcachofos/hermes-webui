@@ -93,15 +93,17 @@ def test_copy_link_has_clipboard_fallback():
 
 
 def test_read_only_sessions_can_still_open_actions_for_copy_link():
-    start = SESSIONS_JS.index("function _openSessionActionMenu(session, anchorEl){")
+    start = SESSIONS_JS.index("function _openSessionActionMenu(")
     end = SESSIONS_JS.index("document.addEventListener('click'", start)
     open_menu_block = SESSIONS_JS[start:end]
+    assert "function _openSessionActionMenu(session, anchorEl, pointerEvent){" in open_menu_block
     assert "Read-only imported sessions cannot be modified" not in open_menu_block
     assert "const isReadOnly = _isReadOnlySession(session);" in open_menu_block
     # Read-only sessions still get a usable menu: Copy link + Export as HTML
     # (both non-mutating) are offered, then the menu mounts and returns early
-    # before any mutating action is appended.
-    assert "if(isReadOnly){\n    _appendSessionExportHtmlAction(menu, session);\n    _mountSessionActionMenu(menu, session, anchorEl);\n    return;\n  }" in open_menu_block
+    # before any mutating action is appended. The pointer is forwarded so a
+    # right-click on a read-only row opens at the click, same as any other row.
+    assert "if(isReadOnly){\n    _appendSessionExportHtmlAction(menu, session);\n    _mountSessionActionMenu(menu, session, anchorEl, pointerEvent);\n    return;\n  }" in open_menu_block
 
 
 def test_copy_link_i18n_keys_have_english_and_german_labels():
