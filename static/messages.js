@@ -9637,6 +9637,15 @@ function _ensureClarifyResizeListener() {
   window.addEventListener("resize", () => {
     const card = $("clarifyCard");
     if (card && card.classList.contains("visible")) {
+      // #7616: a resize (window drag, phone rotation) changes the column width,
+      // so the draft re-wraps and the height/overflow computed for the old
+      // width go stale — a draft that used to fit then wraps past the field and
+      // stays clipped until the user types again. Re-measure FIRST: it resyncs
+      // the reservation itself whenever the effective height actually changed,
+      // and the explicit sync below covers the width-only case where the card
+      // box moved but the field height did not. Measuring a collapsed (hidden)
+      // field is a no-op by design — it defers instead of clobbering.
+      _autoResizeClarifyInput();
       _syncClarifyTranscriptSpace(card, {immediate: true});
     }
   }, {passive: true});

@@ -49,6 +49,7 @@ EXTRACTED_FUNCTIONS = (
     "_autoResizeClarifyInput",
     "_bindClarifyInputAutoResize",
     "toggleClarifyCardCollapsed",
+    "_ensureClarifyResizeListener",
 )
 
 
@@ -140,6 +141,19 @@ function _clarifyMessagesNearBottom() {{ return true; }}
 function scrollToBottom() {{ SCROLL_FOLLOW_CALLS++; }}
 function _syncClarifyCollapseButton() {{}}
 
+// `_ensureClarifyResizeListener` registers on `window`; give it one and let the
+// scenario fire the event the way the browser would.
+const WINDOW_HANDLERS = {{}};
+globalThis.window = {{
+  addEventListener(type, fn) {{
+    (WINDOW_HANDLERS[type] = WINDOW_HANDLERS[type] || []).push(fn);
+  }},
+}};
+function fireResize() {{ (WINDOW_HANDLERS["resize"] || []).forEach((fn) => fn()); }}
+// Module-level flag the production listener guards on (declared at messages.js
+// top level, outside the extracted function body).
+let _clarifyResizeListenerReady = false;
+
 function makeClassList(el) {{
   const set = new Set();
   return {{
@@ -163,6 +177,11 @@ const messages = {{
   }},
 }};
 
+// #7616 finding (window resize / phone rotate): a narrower column makes each
+// logical line wrap onto more rendered rows. Model that with a NARROW switch so
+// a resize event can change the content height the way a real reflow would.
+let NARROW = false;
+
 const input = {{
   value: "",
   disabled: false,
@@ -176,7 +195,9 @@ const input = {{
   // A laid-out textarea reports its content height; a display:none one reports 0.
   get scrollHeight() {{
     if (this.getClientRects().length === 0) return 0;
-    return Math.max(1, String(this.value).split("\\n").length) * 20;
+    const rows = String(this.value).split("\\n").reduce(
+      (n, line) => n + (NARROW ? Math.max(1, Math.ceil(line.length / 45)) : 1), 0);
+    return Math.max(1, rows) * 20;
   }},
   getClientRects() {{
     return (HIDDEN || card.classList.contains("collapsed")) ? [] : [{{}}];
@@ -223,7 +244,6 @@ function _startClarifyCountdown() {{}}
 function _clearClarifyCountdownTimer() {{}}
 function _clearClarifyHideTimer() {{}}
 function _clarifySetControlsDisabled() {{}}
-function _ensureClarifyResizeListener() {{}}
 const S = {{ session: {{ session_id: "sess" }} }};
 let _clarifySignature = null, _clarifySessionId = null, _clarifyId = null, _clarifyVisibleSince = 0;
 
@@ -243,6 +263,7 @@ function scrollFollow() {{ return SCROLL_FOLLOW_CALLS; }}
 function type(text) {{ input.value = text; input.dispatch("input"); }}
 function settle() {{ runFrames(); runTimers(); }}
 function setHidden(hidden) {{ HIDDEN = !!hidden; }}
+function setNarrow(narrow) {{ NARROW = !!narrow; }}
 
 {scenario_js}
 
@@ -550,3 +571,62 @@ def test_show_without_a_pending_marker_does_not_resize_twice():
     res = out["result"]
     assert res["height"] == "42px", res
     assert res["marker"] is None, res
+
+
+# ── 5. a window resize / phone rotation must re-wrap and re-reserve ──────────
+
+
+def test_window_resize_remeasures_the_answer_field():
+    """Narrowing the window must re-wrap the draft and move the reservation.
+
+    The window resize listener only re-reserved transcript space; it never
+    re-measured the field, so after a resize or a phone rotation the textarea
+    kept the height and ``overflowY`` computed for its old width. A draft that
+    used to fit then wrapped past the field and stayed clipped until the user
+    typed again or an unrelated poll happened to run.
+    """
+    out = _run(
+        """
+        card.classList.add("visible");
+        _bindClarifyInputAutoResize();
+        _ensureClarifyResizeListener();
+        type("line one: a clarification answer that runs long enough to need more than one row\\n"
+             + "line two: a clarification answer that runs long enough to need more than one row\\n"
+             + "line three: a clarification answer that runs long enough to need more than one row\\n"
+             + "line four: a clarification answer that runs long enough to need more than one row");
+        settle();
+        record("heightBefore", height());
+        record("overflowBefore", overflow());
+        record("reservationBefore", reservation());
+
+        // The column narrows (window drag / phone rotation): every logical line
+        // now wraps onto two rendered rows.
+        setNarrow(true);
+        fireResize();
+        settle();
+        record("heightAfter", height());
+        record("overflowAfter", overflow());
+        record("reservationAfter", reservation());
+        """
+    )
+    res = out["result"]
+    # 4 logical rows * 20px + 2px border, wide layout.
+    assert res["heightBefore"] == "82px", res
+    # 8 wrapped rows * 20px + 2 = 162 content, clamped at the 160px cap.
+    assert res["heightAfter"] == "160px", (
+        f"the window resized but the answer field kept its old height "
+        f"({res['heightBefore']} -> {res['heightAfter']}): the resize listener "
+        "re-reserved transcript space without re-measuring the field, so the "
+        "re-wrapped draft stays clipped at the old width"
+    )
+    assert res["overflowAfter"] == "auto", (
+        f"past the cap the field must scroll, got overflowY={res['overflowAfter']!r}"
+    )
+    assert res["reservationAfter"] is not None, (
+        "resize left --clarify-card-height unset"
+    )
+    assert int(res["reservationAfter"].replace("px", "")) == 100 + 160 + 24, (
+        f"the reservation ({res['reservationAfter']}) does not follow the "
+        f"re-measured 160px field"
+    )
+    assert out["scrollFollow"] > 0, "scroll-follow behavior was dropped"
