@@ -153,6 +153,7 @@ function fireResize() {{ (WINDOW_HANDLERS["resize"] || []).forEach((fn) => fn())
 // Module-level flag the production listener guards on (declared at messages.js
 // top level, outside the extracted function body).
 let _clarifyResizeListenerReady = false;
+let _clarifyResizeSettleTimer = null;
 
 function makeClassList(el) {{
   const set = new Set();
@@ -630,3 +631,44 @@ def test_window_resize_remeasures_the_answer_field():
         f"re-measured 160px field"
     )
     assert out["scrollFollow"] > 0, "scroll-follow behavior was dropped"
+
+
+def test_window_resize_remeasures_again_once_the_layout_settles():
+    """A resize that fires mid-transition must be re-measured after it settles.
+
+    The sidebar and workspace panel animate their width, so when the window is
+    widened the resize event can arrive while the chat column is still narrow.
+    The synchronous measure then keeps a too-tall field (390 -> 1440 px left
+    106 px for an 85 px draft in Chromium, #8304 gate). The listener must
+    measure the field again after the 420 ms settle, not only the card.
+    """
+    out = _run(
+        """
+        card.classList.add("visible");
+        _bindClarifyInputAutoResize();
+        _ensureClarifyResizeListener();
+        type("line one: a clarification answer that runs long enough to need more than one row\\n"
+             + "line two: a clarification answer that runs long enough to need more than one row\\n"
+             + "line three: a clarification answer that runs long enough to need more than one row\\n"
+             + "line four: a clarification answer that runs long enough to need more than one row");
+        settle();
+        record("wide", height());
+
+        // The resize event arrives while the column is still mid-transition
+        // (narrow); it finishes widening afterwards with no further event.
+        setNarrow(true);
+        fireResize();
+        runFrames();
+        record("atEvent", height());
+        setNarrow(false);
+        runTimers();
+        record("settled", height());
+        """
+    )
+    res = out["result"]
+    assert res["wide"] == "82px", res
+    assert res["atEvent"] == "160px", res
+    assert res["settled"] == "82px", (
+        f"after the layout settled the field stayed {res['settled']} instead of "
+        f"{res['wide']}: the resize listener never measured the field again"
+    )

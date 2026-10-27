@@ -9509,6 +9509,7 @@ function _syncClarifyCollapseButton(card) {
 }
 
 let _clarifyResizeListenerReady = false;
+let _clarifyResizeSettleTimer = null;
 
 function _clarifyMessagesNearBottom(messages) {
   if (!messages) return false;
@@ -9647,6 +9648,17 @@ function _ensureClarifyResizeListener() {
       // field is a no-op by design — it defers instead of clobbering.
       _autoResizeClarifyInput();
       _syncClarifyTranscriptSpace(card, {immediate: true});
+      // #8304 gate: the sidebar and workspace panel can still be animating
+      // their width when the resize event fires, so the measure above may read
+      // a transitional column width. Measure the field again once that has
+      // settled (the same 420 ms window the reservation sync uses); a changed
+      // height resyncs the reservation itself.
+      if (_clarifyResizeSettleTimer) clearTimeout(_clarifyResizeSettleTimer);
+      _clarifyResizeSettleTimer = setTimeout(() => {
+        _clarifyResizeSettleTimer = null;
+        const settled = $("clarifyCard");
+        if (settled && settled.classList.contains("visible")) _autoResizeClarifyInput();
+      }, 420);
     }
   }, {passive: true});
 }
