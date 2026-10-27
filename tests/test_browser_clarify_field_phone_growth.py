@@ -161,3 +161,41 @@ def test_clarify_field_still_grows_above_the_breakpoint(clarify_page):
         f"at 641px the field rendered at {geom['rendered']:.1f}px for a "
         f"{geom['scrollHeight']}px answer"
     )
+
+
+MEDIUM_ANSWER = (
+    "A medium clarification answer: it wraps onto several rows in the narrow "
+    "phone column, but on a desktop-width card it needs only two or three, so "
+    "the field must shrink back once the window is widened again."
+)
+
+
+def test_clarify_field_measures_the_final_width_right_after_widening(clarify_page):
+    """Widening 390 -> 1440 px must not leave a stale, too-tall field (#8304 gate w37).
+
+    Crossing the 640 px breakpoint flips ``flex-grow`` 0 -> 1. With
+    ``transition:all`` on ``.clarify-input`` that change animated, so the window
+    resize listener, which measures synchronously, saw the field at its 220 px
+    ``min-width`` mid-animation and wrote the 160 px cap for an answer that
+    needs about 85 px. Measuring right after the resize must equal measuring
+    once everything has settled.
+    """
+    page = clarify_page
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.evaluate("(a) => { document.getElementById('clarifyInput').value = a; }", MEDIUM_ANSWER)
+    page.evaluate("() => window._autoResizeClarifyInput()")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    immediate = page.evaluate(
+        "() => { window._autoResizeClarifyInput(); const i = document.getElementById('clarifyInput');"
+        " return {h: i.style.height, w: i.getBoundingClientRect().width}; }"
+    )
+    page.wait_for_timeout(400)
+    settled = page.evaluate(
+        "() => { window._autoResizeClarifyInput(); const i = document.getElementById('clarifyInput');"
+        " return {h: i.style.height, w: i.getBoundingClientRect().width}; }"
+    )
+    assert settled["w"] > 600, f"precondition: the desktop field is wide (settled width {settled['w']:.0f}px)"
+    assert immediate["h"] == settled["h"], (
+        f"right after widening the field measured {immediate['h']} at {immediate['w']:.0f}px wide, "
+        f"but {settled['h']} once settled: the width was still animating"
+    )
