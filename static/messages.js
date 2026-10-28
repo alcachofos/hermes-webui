@@ -1954,11 +1954,17 @@ async function send(){
       // A plain skill is exempt for the same reason: its metadata comes from
       // /api/skills, not from the command registry, so a 503 there says
       // nothing about whether the skill is enabled. Resolve it before the
-      // guard and let a positively matched skill through.
+      // guard and let a positively matched skill through. The match honours
+      // the `_` ≡ `-` equivalence #8203 gave every other slash lookup, so
+      // `/deep_research` still finds the `deep-research` skill.
+      const _skillVariants =
+        typeof _slashCommandSlugVariants === 'function'
+          ? _slashCommandSlugVariants(_parsedCmd.name)
+          : [_parsedCmd.name];
       const _skillCmd =
         _registryUnavailable && !_bundleCmd && _agentCmdName !== 'moa'
         && typeof loadSkillCommands === 'function'
-          ? (await loadSkillCommands()).find(skill => skill.name === _parsedCmd.name)
+          ? (await loadSkillCommands()).find(skill => _skillVariants.includes(skill.name))
           : null;
       if(!_bundleCmd&&!_skillCmd&&_registryUnavailable&&_agentCmdName!=='moa'){
         if(!S.session){await newSession(false,{pickerClaimEpoch:_sendProjectPickerClaim});}
