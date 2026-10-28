@@ -40,7 +40,10 @@ def test_pet_arg_hint_branch_reads_args_hint_from_metadata():
     """
     # The branch is the explicit pet special-case (still in place to
     # override cli_only gating); it must set arg from the metadata.
-    pet_branch_idx = COMMANDS_JS.find("if('pet'.startsWith(q)&&!seen.has('pet'))")
+    # master's #8143 refactor routes the pet row through the shared
+    # _slashCommandMatchesPrefix() helper; the pinned mechanism (the pet
+    # special-case branch itself) is unchanged, only the call shape moved.
+    pet_branch_idx = COMMANDS_JS.find("if(_slashCommandMatchesPrefix('pet',q)&&!seen.has('pet'))")
     assert pet_branch_idx != -1, "pet special-case branch is gone -- regression on #7675 follow-up #1"
     end_idx = COMMANDS_JS.find("\n  }", pet_branch_idx)
     branch = COMMANDS_JS[pet_branch_idx:end_idx]

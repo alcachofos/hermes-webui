@@ -5,11 +5,15 @@
 
 ### Added
 
+- **A read-only endpoint reports a session's background delegations.** `GET /api/session/delegations?session_id=...` returns how many delegated tasks are still running and how many have finished but not yet been delivered, so a client can warn before switching away. It reads counts only (no prompts or results), stays inside the session's own profile, and answers `unknown` rather than zero when the ledger can't be read. Thanks @happy5318. (Refs #8019)
+
 - **Pinch, pan and zoom in the image lightbox.** An enlarged chat image can now be pinched to zoom and panned with two fingers on touch screens, zoomed with the mouse wheel at the cursor and dragged on desktop, and zoomed or reset with `+`, `-` and `F` on the keyboard. A Fit button next to close returns it to fit, the zoom carries across previous/next images, and the image can no longer be dragged out of view. An edge swipe inside the open lightbox no longer opens the session drawer behind it, and keyboard focus now moves into the dialog. A maintainer fold makes both buttons 44×44 on touch screens with a gap between them, gives them a hover state you can see over the dark backdrop and over bright images (the close button in the diagram lightbox included), and keeps Tab order in visual order. Thanks @silent-reader-cn. (#6896)
 
 - **Native OIDC login works with identity providers that accept only HTTP Basic client authentication.** WebUI always sent the client secret in the token request body (`client_secret_post`), which providers that support only `client_secret_basic` reject. In the default `auto` mode it now switches to Basic only when the provider's discovery document says `client_secret_post` is not supported, so existing deployments send byte-for-byte the same request; `webui_oidc.token_auth_method` (or `HERMES_WEBUI_OIDC_TOKEN_AUTH_METHOD`) can force either method. Basic credentials are form-encoded first as RFC 6749 section 2.3.1 requires, and an unsupported configured value is logged once instead of on every auth check. Thanks @chesterXalan. (#6471)
 
 ### Performance
+
+- **Profile skill counts no longer re-walk the skill tree on every request.** On a large skill library the per-profile skill stats probe stat()-ed every file on each `/api/profiles` call (about 17 ms per call at 200 skills). The counts are now served from cache for a short window and refreshed in the background, with one refresh per profile at a time. Saving, deleting or toggling a skill invalidates them at once, including while a refresh is running, so a change is never overwritten by an older count. Thanks @RajPabnani03. (#7940)
 
 - **Fork a scheduled-job (cron) conversation into your own editable chat.** Cron-run sessions are read-only (the scheduler owns them), so you couldn't continue one. You can now branch/fork a cron session into a new WebUI-owned conversation — the original read-only session is never modified, and the fork picks up its history so you can carry on. Only genuine cron sessions qualify (verified by the server-side source, not a guessable id), and every other read-only session stays unbranchable. Thanks @rodboev. (#5555, #5477)
 
@@ -50,6 +54,28 @@
   exactly as before. Thanks @ybai08. (#8138, fixes #8126)
 
 ### Fixed
+
+- **Slash autocomplete treats `_` and `-` as the same command.** A command or skill named with one separator can now be found by typing the other: `/knowledge_loop` finds `knowledge-loop`, and the reverse. Menu selection and direct submission both send the command's real name with the arguments kept. When both spellings exist, the one you typed comes first, and plain prefix typing keeps its usual order. (#8143, #8203)
+
+- **A failed browser dictation no longer pins the mic to server recording forever.** When browser speech recognition fails (network, permission, audio capture), the mic remembers to use server recording on the next reload. That preference used to never expire, so one VPN hiccup or a since-fixed browser kept the device on server recording for good. It now expires after 24 hours, and a preference saved by an older release gets a 24-hour window from its first read. The fallback within the same session is still immediate. Thanks @solarmaster961. (#8295)
+
+- **Custom providers that share one `base_url` route to the right entry.** When two `custom_providers` entries use the same URL, the entry that declares the configured default model now wins over declaration order, and each entry's live model list is probed with its own key. Without a declaring entry, the old first-match behaviour stands. Existing sessions keep their saved provider; re-pick the model once to switch. Thanks @RajPabnani03. (#7176)
+
+- **The workspace preview stops asking to discard edits you can't see.** Dirtiness is derived from an on-screen editor whose text differs from what was loaded or saved, so closing the Files panel, hiding the editor, or typing back to the original text no longer triggers the discard prompt, and switching workspaces no longer closes the panel or carries one workspace's unsaved text into another's file. Thanks @fedebyes. (#8515, fixes #8514)
+
+- **New Chat no longer shows the previous session's transcript.** Clicking New Chat while another session was still loading could let that load's response land in the new pane. The transcript commit point now also checks that the session it loaded is still the current one, and New Chat invalidates the in-flight load. Thanks @happy5318. (#8356)
+
+- **The agent is no longer woken again for a background completion it already read.** A completion consumed through a terminal poll is not treated as read (a result longer than the preview is still delivered once), while one the agent actually read is not re-delivered, including when a launch fails and the 2-second retry fires before the failure handler. Thanks @angel291592. (#8363)
+
+- **Deleted Desktop conversations no longer linger in the sidebar.** A Desktop-origin row whose session was deleted from its owning profile's `state.db` is pruned from the sidebar index, with either CLI-visibility setting. Pruning only happens when that profile's own database is readable and confirms the deletion; a missing, corrupt, unreadable or inaccessible database keeps the row. Thanks @pxxD1998.
+
+- **Post-compression tool-result pruning follows the context engine that actually owns the turn.** Pruning was gated on the configured engine name, so a fallback to the built-in compressor (empty, unavailable or edited engine setting) skipped it and kept large tool results in context. The gate now reads the active engine object. Thanks @eringerli.
+
+- **Context deduplication keeps a repeated user message that is a genuinely new turn.** When the same text is sent again as its own turn, the replay dedup now decides by stable message id instead of collapsing it into the earlier copy, so the next model call sees both turns. Rows without ids keep the old collapse rule. Thanks @happy5318. (Refs #6310)
+
+- **WebUI starts on every launch method with a self-updating Agent (v0.21.6+).** These Agents restart the process that first loads their startup code, into their own Python and without third-party packages. WebUI loaded that code only when start.sh or bootstrap.py had set `HERMES_WEBUI_AGENT_DIR`. Every other launch loaded it late, and the restarted process died on `No module named 'ruamel'`/`'yaml'`: the README manual launch, a systemd unit with only `PYTHONPATH`, `python server.py`, `pip install -e`, and single-container Docker. WebUI now finds the Agent the same way `api.config` does and loads its startup code first. Only Agents that can restart the process are loaded this early; older Agents behave as before, and your own `HERMES_WEBUI_AGENT_DIR` still wins. Single-container Docker with a self-updating git checkout runs the container's staged copy, so Settings' Agent update says it is not a git repository there: update on the host with `hermes update`. (#8355 by @MuhammadUsamaMX, fixes #8529 and #7843)
+
+- **Reconnecting tabs no longer re-show approval and clarify prompts that were already answered.** Both journal replay paths now skip a clarify that its tool call already completed and any prompt from a run that has finished, so a reload or reconnect after the fact shows no dead card. A still-pending approval keeps replaying even when a clarify in the same run has completed. Thanks @happy5318.
 
 - **Approvals on Gateway-backed runs answer the prompt you saw again.** Clicking Allow/Deny on a Runs API approval failed with `400 invalid_params` against current Agents. WebUI now answers with the generation-fenced body, so a stale card can never answer a newer prompt, and a click that cannot be verified (timeout, 404, 409, or a projection that does not list pending controls) keeps the card and reports the error instead of claiming success. Legacy approval bodies are unchanged. Thanks @Overview3833. (#8409)
 
@@ -294,6 +320,8 @@
 - **Manual title regeneration honors your configured auxiliary title-generation timeout.** The manual "regenerate title" action used the frontend's default 30s request timeout, so a slow-but-valid generation timed out on the client when `auxiliary.title_generation.timeout` was set higher. It now fetches the current timeout fresh per regen (no stale cache across profile switches) and applies it only when valid, falling back to the 30s default on any fetch failure. Thanks @Stacey2911. (#5374)
 
 ### Documentation
+
+- **Reverse-proxy docs: a same-host proxy needs an explicit opt-in.** `docs/remote-access.md` now explains per-client login rate-limit buckets behind a proxy, and that a loopback proxy is trusted for the forwarded client address, while the local-origin check reads that address only with `HERMES_WEBUI_TRUST_FORWARDED_FOR=1`. Without it, every request through a same-host proxy counts as local, which matters on an instance with no password. (#8545)
 
 - **Documented the reverse-proxy basic-auth caveat for installed PWAs.** README, onboarding, and troubleshooting now explain that proxy basic auth can block the same-origin service-worker/shell update fetches an installed PWA needs (leaving it on a blank screen after an update), and give recovery steps — prefer WebUI's built-in password, or scope proxy auth so `sw.js`/manifest/shell requests complete. Thanks @rodboev. (#5673, #2781)
 
