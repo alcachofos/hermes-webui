@@ -752,6 +752,33 @@ def test_enabled_skill_dispatches_when_registry_is_unavailable():
     )
 
 
+def test_enabled_skill_underscore_spelling_dispatches_when_registry_is_unavailable():
+    """Release-stage integration fold (#7683 x #8203): `_` and `-` are the same
+    command since #8203, so the outage exemption must match the underscore
+    spelling of a hyphenated skill too. Chromium on master 516321171c74
+    submits `/deep_research explain`; the stage before this fold answered
+    "metadata unavailable"."""
+    out = _run_send(
+        "/deep_research explain",
+        """
+        globalThis.loadSkillCommands = async () => [
+          { name: 'deep-research', desc: 'Run a deep research pass' },
+        ];
+        await send();
+        return {};
+        """,
+        commands_api_error=True,
+    )
+    assert "/api/chat/start" in out["apiCalls"], (
+        "the underscore spelling of an enabled skill must still reach "
+        f"/api/chat/start during a registry outage, got: {out['apiCalls']}"
+    )
+    assistant = [m for m in out["messages"] if m["role"] == "assistant"]
+    assert not any("temporarily unavailable" in m["content"] for m in assistant), (
+        f"the skill must not be answered with metadata-unavailable: {assistant!r}"
+    )
+
+
 def test_unknown_command_still_fails_closed_when_registry_is_unavailable():
     """#7683 round-2 (control): the skill exemption must not open the leak the
     guard closes — a command that is NOT a skill must still fail closed with
