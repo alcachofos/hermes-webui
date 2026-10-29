@@ -95,3 +95,15 @@ def test_initial_refresh_label_matches_the_default_jobs_tab() -> None:
     m = re.search(r'<button[^>]*id="cronRefreshBtn"[^>]*>', INDEX_HTML)
     assert m and 'data-tooltip="Refresh job list"' in m.group(0)
     assert 'aria-label="Refresh job list"' in m.group(0)
+
+
+def test_panel_head_tooltips_anchor_right_so_the_panel_edge_does_not_clip_them() -> None:
+    # 'Refresh script list' centred under the button ran 19 px past the
+    # panel's overflow edge and rendered as 'Refresh script lis' (UX round 6).
+    # The right-anchored variant grows leftward, as the New conversation
+    # button's does.
+    for marker in ('id="cronRefreshBtn"', 'onclick="openCronCreate()"'):
+        m = re.search(r'<button[^>]*' + re.escape(marker) + r'[^>]*>', INDEX_HTML)
+        assert m, marker
+        assert "has-tooltip--bottom-right" in m.group(0), marker
+
