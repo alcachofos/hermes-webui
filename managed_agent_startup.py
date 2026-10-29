@@ -22,7 +22,7 @@ _RELAUNCH_AGENT_DIR_ENV = "_HERMES_WEBUI_RELAUNCH_AGENT_DIR"
 # (Agent v0.21.6+): ``hermes_bootstrap`` calls ``hermes_cli.venv_sync.prepare_launch``,
 # which resolves the store Python through ``pm.environments``. ``hermes_bootstrap.py``
 # alone is not enough: pre-PM Agents ship one too (the Windows UTF-8 shim, since
-# 2026-05). docker_init.bash's select_staged_agent_for_git_checkout checks the same
+# 2026-05). docker_init.bash's keep_mounted_agent_from_relaunching checks the same
 # files.
 _PM_LAUNCH_MARKERS = ("hermes_bootstrap.py", "hermes_cli/venv_sync.py", "pm/environments.py")
 
