@@ -549,3 +549,38 @@ def test_the_whitelist_regex_is_gone_from_the_name_guard() -> None:
     # The traversal checks must still be there.
     assert '"/" in name' in body
     assert '"\\\\" in name' in body
+
+
+def test_long_script_names_are_listed_and_readable_up_to_name_max(tmp_path, monkeypatch):
+    """Release gate 2026-10-29: a 128-character cap hid valid scripts (129 and 200
+    characters) that Linux stores and the Agent's cron runner runs. The only limit is
+    the filesystem's 255-byte NAME_MAX."""
+    mod = _scripts_module()
+    names = ["a" * 126 + ".py", "b" * 197 + ".sh", "c" * 252 + ".py"]
+    for name in names:
+        (tmp_path / name).write_text("# long\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "scripts_dir", lambda: tmp_path)
+
+    listed = [s["name"] for s in mod.list_scripts()["scripts"]]
+    for name in names:
+        assert name in listed, f"{len(name)}-char name was dropped"
+        result = mod.read_script(name)
+        assert result is not None and result.get("content") == "# long\n"
+    # Byte length, not character count: 128 two-byte characters + ".py" is 259 bytes.
+    assert mod._is_safe_script_name("é" * 128 + ".py") is False
+    assert mod._is_safe_script_name("d" * 253 + ".py") is False
+
+
+def test_raw_read_serves_only_script_extensions(tmp_path, monkeypatch):
+    """The listing shows only .py/.sh; the raw read must not serve other files from
+    the same directory (release gate 2026-10-29: notes.txt returned 200)."""
+    mod = _scripts_module()
+    for name in ("notes.txt", "secrets.env", "noext", "run.PY", "ok.sh"):
+        (tmp_path / name).write_text("x\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "scripts_dir", lambda: tmp_path)
+
+    assert mod.read_script("notes.txt") is None
+    assert mod.read_script("secrets.env") is None
+    assert mod.read_script("noext") is None
+    assert mod.read_script("run.PY") is not None
+    assert mod.read_script("ok.sh") is not None
