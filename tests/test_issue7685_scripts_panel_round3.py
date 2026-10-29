@@ -553,8 +553,8 @@ def test_the_whitelist_regex_is_gone_from_the_name_guard() -> None:
 
 def test_long_script_names_are_listed_and_readable_up_to_name_max(tmp_path, monkeypatch):
     """Release gate 2026-10-29: a 128-character cap hid valid scripts (129 and 200
-    characters) that Linux stores and the Agent's cron runner runs. The only limit is
-    the filesystem's 255-byte NAME_MAX."""
+    characters) that Linux stores and the Agent's cron runner runs. The name guard has
+    no length policy; the filesystem enforces its own limit."""
     mod = _scripts_module()
     names = ["a" * 126 + ".py", "b" * 197 + ".sh", "c" * 252 + ".py"]
     for name in names:
@@ -566,9 +566,11 @@ def test_long_script_names_are_listed_and_readable_up_to_name_max(tmp_path, monk
         assert name in listed, f"{len(name)}-char name was dropped"
         result = mod.read_script(name)
         assert result is not None and result.get("content") == "# long\n"
-    # Byte length, not character count: 128 two-byte characters + ".py" is 259 bytes.
-    assert mod._is_safe_script_name("é" * 128 + ".py") is False
-    assert mod._is_safe_script_name("d" * 253 + ".py") is False
+    # APFS accepts Unicode names longer than 255 UTF-8 bytes; the guard must not
+    # impose Linux's limit on them.
+    assert mod._is_safe_script_name("界" * 85 + ".py") is True
+    # A name too long for this filesystem is a clean miss, not an exception.
+    assert mod.read_script("x" * 5000 + ".py") is None
 
 
 def test_raw_read_serves_only_script_extensions(tmp_path, monkeypatch):

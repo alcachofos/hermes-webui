@@ -65,9 +65,11 @@ def _is_safe_script_name(name: str) -> bool:
     The checks are ordered cheapest-first and every one of them is a traversal
     or control-character test — never a character-class whitelist.
     """
-    # The only length limit is the filesystem's own (NAME_MAX, 255 bytes): a longer
-    # policy cap hid scripts the Agent's cron runner will run (release gate 2026-10-29).
-    if not name or len(os.fsencode(name)) > 255:
+    # No length policy: the filesystem enforces its own limit (255 bytes on Linux,
+    # more for Unicode names on APFS) and an over-long name fails the open with
+    # ENAMETOOLONG, which the read path already maps to None. A 128-character cap
+    # hid scripts the Agent's cron runner runs (release gate 2026-10-29).
+    if not name:
         return False
     if "/" in name or "\\" in name or "\0" in name:
         return False
