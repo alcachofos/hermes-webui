@@ -17,6 +17,8 @@
 
 ### Performance
 
+- **Long sessions no longer freeze on open and scroll.** Finding the first visible row measured every virtualized row one layout at a time (18,682 forced layouts, 21.8 s in one measured session); it now binary-searches the rows and skips hidden ones. The session HTML cache now keys on the whole rendered message instead of the message count, so an edit in the middle of a transcript cannot serve stale HTML, and pasted-image base64 is not rehashed on every render. No visible change. Thanks @happy5318, building on @RechildIce's analysis in #7695. (#8228)
+
 - **Streaming no longer rebuilds unchanged live activity rows.** While a turn streams, tool and thinking rows that did not change are reused instead of re-rendered, and the running indicator animates on the compositor only (a round pulsing ring). With reduced motion the ring stays still, and the progress shimmer shows a still full-width rail instead of freezing at 60% and jumping to 100%. Thanks @CharlesMcquade. (#7495)
 
 - **Opening a session reads the model catalog from disk once instead of twice.** The freshness check on a session visit parsed the whole models cache to read its build time, and the loader then parsed the same file again. The visit now parses it once and hands that copy to the loader; an invalidation, an atomic rewrite or a second concurrent reader always gets a fresh parse instead of a stale or shared copy. On a 5,000-model catalog that is one fewer ~675 KB JSON parse per session open. (#8302 by @MuhammadUsamaMX, follow-up to #7932, closes #7723)
@@ -51,6 +53,10 @@
 
 ### Security
 
+- **Each profile's agent memory stays in that profile (#8517).** When one WebUI process served several profiles, an agent could bind its memory to another profile's home, so profile A read and wrote B's external memory bank and built-in `MEMORY.md`/`USER.md`, or had its own memory silently refused. Agents are now built and run inside their session's profile and verified afterwards; helper agents (compression, summaries, commit messages, handoff) run without memory; session-end memory commits run as the session's owner and stay pending if refused. Everything fails closed: if the profile cannot be verified, that turn runs without memory and a warning is logged. Older Agents lose some memory with multiple profiles: shared-instance providers (Mnemosyne up to 0.7.1) stay with the first profile used until restart, Agents without `claim_instance` serving several profiles turn external memory off, and Agents older than v0.18 turn all memory off with a warning to update. Current Agents with per-instance providers are unchanged. Thanks @smoke007 for the report. (#8585)
+
+- **Login rate limiting can no longer be bypassed with forwarded headers (#8591, #8595).** Since exp-v0.52.546, with `HERMES_WEBUI_TRUST_FORWARDED_FOR=1` and a listed proxy, a client could pick a fresh login bucket per attempt by rotating `X-Real-IP`, or by sending its own `X-Forwarded-For` through a proxy that relays it unchanged (a bare nginx `proxy_pass`), which made password guessing unlimited. Both login paths (password and passkey) now key on the socket peer again, as v0.52.544 did. Per-client buckets behind a proxy are an explicit opt-in, `HERMES_WEBUI_LOGIN_RATE_LIMIT_PER_CLIENT=1`, for proxies that append to or overwrite `X-Forwarded-For`; even then `X-Real-IP` alone never selects a bucket. Upgrading from exp .546+ with the two old settings: set the new one to keep per-client buckets. See `docs/remote-access.md`. (#8592)
+
 - **Public shares read each embedded local image through one no-follow descriptor.** The share embedder used to resolve, check, stat and then reopen an image by name, so a writer inside an allowed root who swapped a path component while a share was being created could get a file from outside the workspace and attachment roots embedded in the public snapshot. Each image is now mapped lexically to its allowed root, walked component by component without following links, and checked and read from that single descriptor (size capped from `fstat`); anything that can't be read that way gets the existing placeholder. (#8583, refs #6126)
 
 - **Public shares no longer publish inline `data:` images from the conversation.** An image written into a message as a `data:` URI (markdown, a `MEDIA:data:` token or a raw `<img>`) was copied into the public share snapshot unchanged, and the share credential redactor cannot read inside base64, so bytes hidden in such an image were published on the share link. Public share snapshots now show `[Inline attachment omitted from public share]` in its place, including in the share title. Verified local images (#6174) still embed as before, and the private session view, exports and live chat are unchanged. A valid `MEDIA:data:` image is no longer embedded in public shares (#7949). Shares created earlier keep their snapshot until refreshed or revoked. (#8465)
@@ -66,6 +72,8 @@
   exactly as before. Thanks @ybai08. (#8138, fixes #8126)
 
 ### Fixed
+
+- **The model picker takes keyboard focus when it opens.** Opening the composer or Settings model picker now focuses its search box (the list on touch-only devices, so no keyboard pops up), Escape closes only the picker, and focus returns to the chip that opened it. Before, focus stayed on the chip, so typing did nothing and `k` switched the conversation. Thanks @happy5318. (#8445)
 
 - **The workspace file tree works with the keyboard and screen readers.** Its rows are named for screen readers and reachable and operable from the keyboard; before, the Files pane could not be reached by keyboard at all. Thanks @grzezlo, building on @michaldziwisz's #7258. (#8384)
 
