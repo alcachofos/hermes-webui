@@ -29842,6 +29842,15 @@ const LOCALES = {
     pb_save: 'Desa',
     pb_updated: 'Configuració del projecte desada',
     pb_update_failed: 'No s\'ha pogut desar la configuració del projecte: ',
+    delete_entry_aria: (name) => `Suprimeix ${name}`,
+    settings_label_screen_reader_mode: 'Mode de lector de pantalla',
+    settings_desc_screen_reader_mode: 'Optimitza parts de la interfície per als lectors de pantalla. Ara mateix fa que la sortida del terminal sigui llegible i n\'anuncia la sortida nova. Està desactivat per defecte.',
+    tree_external_link_aria: 'enllaç extern',
+    tree_file_aria: 'fitxer',
+    tree_folder_aria: 'carpeta',
+    tree_symlink_aria: 'enllaç simbòlic',
+    tree_row_aria: (name, kind, size) => size ? `${name} ${kind}, ${size}` : `${name} ${kind}`,
+    workspace_tree_aria: 'Fitxers de l\'espai de treball',
   },
 
 };
