@@ -925,13 +925,37 @@ def _channel_tag_glob(channel) -> str:
 _STABLE_DESCRIBE_EXCLUDES = ('--exclude', 'v*+*', '--exclude', 'v*-*')
 
 
-def _channel_describe_filter(channel) -> list:
+def _channel_describe_filter(channel, path=None) -> list:
     """``--match``/``--exclude`` arguments that limit ``git describe`` to the
-    channel's release tags (the tags ``_release_tags`` can list)."""
+    channel's release tags (the tags ``_release_tags`` can list).
+
+    On the stable channel the prerelease excludes apply only when ``path`` has a
+    stable release at all (``_repo_has_stable_release``, #8684)."""
     args = ['--match', _channel_tag_glob(channel)]
-    if _normalize_channel(channel) == 'stable':
+    if _normalize_channel(channel) == 'stable' and (path is None or _repo_has_stable_release(path)):
         args.extend(_STABLE_DESCRIBE_EXCLUDES)
     return args
+
+
+def _repo_has_stable_release(path) -> bool:
+    """Return True when ``path`` has at least one stable release tag (``v0.52.1``).
+
+    The stable channel leaves prerelease tags (``v0.22.5+canary.1``, ``-rc.1``)
+    out of its release list, its ``describe`` and its ahead-count, so that a
+    canary never outranks the release it precedes (#8147). That filter only
+    makes sense when a stable release exists to fall back on. In a checkout
+    whose tags are ALL prereleases (a mirror or fork that publishes only
+    canaries), filtering leaves no release at all; the check then fell through
+    to the branch comparison and the apply moved the install to the untagged
+    branch tip (#8684). Without a stable release, the stable channel therefore
+    keeps v0.52.544's unfiltered behaviour: the channel's tags in version order,
+    so the installed canary stays current and a newer published canary is
+    still offered. A git failure keeps the filter (the #8147 behaviour).
+    """
+    out, ok = _run_git(['tag', '--list', _channel_tag_glob('stable'), '--sort=-creatordate'], path)
+    if not ok:
+        return True
+    return any(_STABLE_RELEASE_TAG_RE.match(line.strip()) for line in (out or '').splitlines())
 
 
 def _read_update_channel() -> str:
@@ -1020,8 +1044,16 @@ def _release_tags(path, channel=DEFAULT_UPDATE_CHANNEL):
     if not (ok and out):
         return []
     tags = [line.strip() for line in out.splitlines() if line.strip()]
-    tags = [t for t in tags if _STABLE_RELEASE_TAG_RE.match(t)]
-    return _order_stable_tags(tags)
+    releases = [t for t in tags if _STABLE_RELEASE_TAG_RE.match(t)]
+    if not releases:
+        # No stable release at all, only prereleases (#8684): keep v0.52.544's
+        # unfiltered version-order list rather than an empty one, which would
+        # send the check and the apply to the untagged branch tip.
+        out, ok = _run_git(['tag', '--list', glob, '--sort=-v:refname'], path)
+        if not (ok and out):
+            return []
+        return [line.strip() for line in out.splitlines() if line.strip()]
+    return _order_stable_tags(releases)
 
 
 def _current_release_tag(path, channel=DEFAULT_UPDATE_CHANNEL):
@@ -1033,7 +1065,7 @@ def _current_release_tag(path, channel=DEFAULT_UPDATE_CHANNEL):
     math resolve to the experimental tag and fall through to the branch firehose.
     """
     out, ok = _run_git(
-        ['describe', '--tags', '--abbrev=0', *_channel_describe_filter(channel)],
+        ['describe', '--tags', '--abbrev=0', *_channel_describe_filter(channel, path)],
         path,
     )
     return out if ok and out else None
@@ -1066,8 +1098,9 @@ def _count_channel_tags_ahead(path, channel=DEFAULT_UPDATE_CHANNEL):
     if not (ok and out):
         return 0
     tags = [line.strip() for line in out.splitlines() if line.strip()]
-    if _normalize_channel(channel) == 'stable':
-        # Count releases, not the prerelease tags _release_tags drops.
+    if _normalize_channel(channel) == 'stable' and _repo_has_stable_release(path):
+        # Count releases, not the prerelease tags _release_tags drops. With no
+        # stable release at all, _release_tags lists the prereleases (#8684).
         tags = [t for t in tags if _STABLE_RELEASE_TAG_RE.match(t)]
     return len(tags)
 
@@ -1262,7 +1295,7 @@ def _head_is_past_latest_tag(path, current_tag, channel=DEFAULT_UPDATE_CHANNEL):
     if not current_tag:
         return False
     full_desc, ok = _run_git(
-        ['describe', '--tags', '--always', *_channel_describe_filter(channel)],
+        ['describe', '--tags', '--always', *_channel_describe_filter(channel, path)],
         path,
     )
     return bool(ok and full_desc and full_desc != current_tag)
