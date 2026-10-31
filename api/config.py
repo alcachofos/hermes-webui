@@ -1684,20 +1684,20 @@ def _custom_provider_entries(
 ) -> list[dict]:
     """Read-only legacy-shaped view of configured custom providers.
 
-    An explicitly empty/malformed legacy store still suppresses native catalog
-    fallback. In a mixed store legacy identities win. Native mapping keys are
+    A missing, empty or malformed legacy store has no legacy winners; native
+    providers are still read, as v0.52.544's catalog and routing did (#8685).
+    In a mixed store legacy identities win. Native mapping keys are
     identities; their editable names are labels only. Never insert this view
     into config or use it in place of the complete record during connection
     selection (``_select_custom_provider_record``). Catalogs retain the older
     inactive bare models-only exclusion; other metadata readers remain complete.
     """
     source = config_obj if isinstance(config_obj, dict) else cfg
-    entries = source.get("custom_providers", [])
-    if not isinstance(entries, list):
-        return []
-    entries = [entry for entry in entries if isinstance(entry, dict)]
-    if "custom_providers" in source and not entries:
-        return []
+    raw_entries = source.get("custom_providers", [])
+    entries = (
+        [entry for entry in raw_entries if isinstance(entry, dict)]
+        if isinstance(raw_entries, list) else []
+    )
     native = source.get("providers")
     if not isinstance(native, dict):
         return entries
@@ -1866,14 +1866,36 @@ def _named_custom_provider_slug_for_provider(
     if not raw:
         return ""
     raw_suffix = raw.removeprefix("custom:")
+    # A bare built-in or plugin id (``openai``) is claimed only by a legacy
+    # ``custom_providers`` entry of that name, as on v0.52.544. A native
+    # ``providers['custom:openai']`` record needs the explicit ``custom:openai``
+    # selector; it never takes over the built-in route, its key or its
+    # endpoint (#8685).
+    legacy_only = not raw.startswith("custom:") and not _is_native_custom_provider_key(raw)
+    legacy_names = _legacy_custom_provider_names(config_obj) if legacy_only else set()
     for entry in _custom_provider_entries(config_obj):
         entry_name = str(entry.get("name") or "").strip().lower()
         slug = _custom_provider_slug_from_name(entry_name)
         if not entry_name or not slug:
             continue
+        if legacy_only and entry_name not in legacy_names:
+            continue
         if raw in {entry_name, slug} or raw_suffix == slug.removeprefix("custom:"):
             return slug
     return ""
+
+
+def _legacy_custom_provider_names(config_obj: dict | None = None) -> set[str]:
+    """Lower-cased names of the legacy ``custom_providers`` list entries."""
+    source = config_obj if isinstance(config_obj, dict) else cfg
+    raw_entries = source.get("custom_providers", [])
+    if not isinstance(raw_entries, list):
+        return set()
+    return {
+        str(entry.get("name") or "").strip().lower()
+        for entry in raw_entries
+        if isinstance(entry, dict) and str(entry.get("name") or "").strip()
+    }
 
 
 def _resolve_configured_provider_id(
