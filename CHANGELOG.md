@@ -77,6 +77,8 @@
 
 ### Fixed
 
+- **Native custom providers route as they did on v0.52.544 again.** Since exp-v0.52.597, a native `providers['custom:openai']` record took over bare `openai` turns while Settings still showed `openai` active, and an empty or malformed `custom_providers` list (the Agent writes `custom_providers: []` after removing the last entry) hid every native provider and sent its models to built-in `openai` with no endpoint. A bare built-in id is again claimed only by a legacy `custom_providers` entry of that name, and an empty legacy list no longer hides native providers. A non-string `model` value (for example a hand-edited `model: 42`) no longer breaks resolution of unrelated providers. (#8689, fixes #8685)
+
 - Tests no longer leak provider state into the shared test environment: two onboarding tests applied a real setup on the test server, and the provider-key tests left API keys exported. With the real Agent installed, a local full-suite run failed `test_quiet_delegation_re_g2` and `test_ttl_cache` because of it. Tests only. (#8678, fixes #8677)
 
 - **During an in-place update, static files are no longer cached for a year under the old version's URL.** The update swaps the checkout before the old process restarts, so for that window the old process served next-revision files under its own `?v=` version and marked them `immutable` for a year, which could leave a browser with a mixed front-end (for example a new control without its CSS). While an update or restart is in progress, static files now get the normal 5-minute cache, and the year-long cache returns if the update fails. Thanks @happy5318. (#8670, refs #6992)
