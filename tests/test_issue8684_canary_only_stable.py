@@ -172,6 +172,8 @@ def test_a_release_published_mid_operation_keeps_the_installed_canary(tmp_path, 
         info = updates._check_repo_release(repo, target, "stable")
         assert info is not None
         assert info["behind"] == 0
+        # behind == 0 alone also accepts a lost canary (current_version None); pin the snapshot's view.
+        assert info["current_version"] == info["latest_version"] == info["current_sha"] == CANARY_2
     assert fired
 
 
