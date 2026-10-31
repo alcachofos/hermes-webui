@@ -925,16 +925,40 @@ def _channel_tag_glob(channel) -> str:
 _STABLE_DESCRIBE_EXCLUDES = ('--exclude', 'v*+*', '--exclude', 'v*-*')
 
 
-def _channel_describe_filter(channel, path=None) -> list:
+def _channel_describe_filter(channel, *, stable_filter: bool = True) -> list:
     """``--match``/``--exclude`` arguments that limit ``git describe`` to the
     channel's release tags (the tags ``_release_tags`` can list).
 
-    On the stable channel the prerelease excludes apply only when ``path`` has a
-    stable release at all (``_repo_has_stable_release``, #8684)."""
+    On the stable channel the prerelease excludes apply only under the stable
+    filter policy (``_stable_filter_for_tags``, #8684)."""
     args = ['--match', _channel_tag_glob(channel)]
-    if _normalize_channel(channel) == 'stable' and (path is None or _repo_has_stable_release(path)):
+    if _normalize_channel(channel) == 'stable' and stable_filter:
         args.extend(_STABLE_DESCRIBE_EXCLUDES)
     return args
+
+
+def _stable_filter_for_tags(tags) -> bool:
+    """The stable filter policy implied by one ``_release_tags`` snapshot.
+
+    ``_release_tags`` lists only stable releases when the repo has one, and
+    only prereleases when it has none, so the snapshot itself says which
+    policy produced it. Every later describe/count/past-tag call in the same
+    check or apply must use this policy rather than re-reading the refs: a
+    concurrent fetch that publishes the first stable release mid-operation
+    would otherwise switch the excludes on between calls, lose the installed
+    canary, and send the apply to the branch tip (#8684 gate). An empty
+    snapshot keeps the #8147 filter.
+    """
+    return not tags or any(_STABLE_RELEASE_TAG_RE.match(t) for t in tags)
+
+
+def _describe_filter_for(path, channel, stable_filter=None) -> list:
+    """Describe filter for ``path``; ``stable_filter=None`` reads the policy from the repo."""
+    if _normalize_channel(channel) != 'stable':
+        return _channel_describe_filter(channel)
+    if stable_filter is None:
+        stable_filter = _repo_has_stable_release(path)
+    return _channel_describe_filter(channel, stable_filter=stable_filter)
 
 
 def _repo_has_stable_release(path) -> bool:
@@ -1048,15 +1072,18 @@ def _release_tags(path, channel=DEFAULT_UPDATE_CHANNEL):
     if not releases:
         # No stable release at all, only prereleases (#8684): keep v0.52.544's
         # unfiltered version-order list rather than an empty one, which would
-        # send the check and the apply to the untagged branch tip.
+        # send the check and the apply to the untagged branch tip. Order the
+        # SAME tag set the first read saw: a stable release fetched between the
+        # two reads must not join a prerelease-policy snapshot.
+        seen = set(tags)
         out, ok = _run_git(['tag', '--list', glob, '--sort=-v:refname'], path)
         if not (ok and out):
             return []
-        return [line.strip() for line in out.splitlines() if line.strip()]
+        return [t for t in (line.strip() for line in out.splitlines()) if t and t in seen]
     return _order_stable_tags(releases)
 
 
-def _current_release_tag(path, channel=DEFAULT_UPDATE_CHANNEL):
+def _current_release_tag(path, channel=DEFAULT_UPDATE_CHANNEL, *, stable_filter=None):
     """Return the latest channel release tag reachable from HEAD, if one exists.
 
     MUST filter by the channel glob (``--match``): a commit tagged BOTH
@@ -1065,7 +1092,7 @@ def _current_release_tag(path, channel=DEFAULT_UPDATE_CHANNEL):
     math resolve to the experimental tag and fall through to the branch firehose.
     """
     out, ok = _run_git(
-        ['describe', '--tags', '--abbrev=0', *_channel_describe_filter(channel, path)],
+        ['describe', '--tags', '--abbrev=0', *_describe_filter_for(path, channel, stable_filter)],
         path,
     )
     return out if ok and out else None
@@ -1080,7 +1107,7 @@ def _release_gap(tags, current, latest):
     return 1
 
 
-def _count_channel_tags_ahead(path, channel=DEFAULT_UPDATE_CHANNEL):
+def _count_channel_tags_ahead(path, channel=DEFAULT_UPDATE_CHANNEL, *, stable_filter=None):
     """Count channel release tags strictly ahead of HEAD (fast-forwardable).
 
     Used only when NO channel tag is reachable behind HEAD — the channel-scoped
@@ -1098,7 +1125,9 @@ def _count_channel_tags_ahead(path, channel=DEFAULT_UPDATE_CHANNEL):
     if not (ok and out):
         return 0
     tags = [line.strip() for line in out.splitlines() if line.strip()]
-    if _normalize_channel(channel) == 'stable' and _repo_has_stable_release(path):
+    if _normalize_channel(channel) == 'stable' and (
+        stable_filter if stable_filter is not None else _repo_has_stable_release(path)
+    ):
         # Count releases, not the prerelease tags _release_tags drops. With no
         # stable release at all, _release_tags lists the prereleases (#8684).
         tags = [t for t in tags if _STABLE_RELEASE_TAG_RE.match(t)]
@@ -1279,7 +1308,7 @@ def _check_webui_published_release_update(channel=DEFAULT_UPDATE_CHANNEL):
     }
 
 
-def _head_is_past_latest_tag(path, current_tag, channel=DEFAULT_UPDATE_CHANNEL):
+def _head_is_past_latest_tag(path, current_tag, channel=DEFAULT_UPDATE_CHANNEL, *, stable_filter=None):
     """Return True when HEAD has moved past the latest reachable channel tag.
 
     `git describe --tags --always --match <glob>` returns the bare tag name
@@ -1295,7 +1324,7 @@ def _head_is_past_latest_tag(path, current_tag, channel=DEFAULT_UPDATE_CHANNEL):
     if not current_tag:
         return False
     full_desc, ok = _run_git(
-        ['describe', '--tags', '--always', *_channel_describe_filter(channel, path)],
+        ['describe', '--tags', '--always', *_describe_filter_for(path, channel, stable_filter)],
         path,
     )
     return bool(ok and full_desc and full_desc != current_tag)
@@ -1354,7 +1383,9 @@ def _select_apply_compare_ref(path, channel=DEFAULT_UPDATE_CHANNEL, target=None)
     tags = _release_tags(path, channel)
     if tags:
         latest_tag = tags[0]
-        current_tag = _current_release_tag(path, channel)
+        # One filter policy for the whole selection, taken from this snapshot (#8684 gate).
+        stable_filter = _stable_filter_for_tags(tags)
+        current_tag = _current_release_tag(path, channel, stable_filter=stable_filter)
         behind = _release_gap(tags, current_tag, latest_tag)
         # Mirror the check side exactly: fall through to the branch comparison
         # whenever the checkout has already moved past the release tag that the
@@ -1365,7 +1396,7 @@ def _select_apply_compare_ref(path, channel=DEFAULT_UPDATE_CHANNEL, target=None)
         # or fail fast-forward; branch comparison is the truthful update path.
         # Short-circuit `or` preserves the original minimal git-call pattern.
         if (
-            (behind == 0 and _head_is_past_latest_tag(path, current_tag, channel))
+            (behind == 0 and _head_is_past_latest_tag(path, current_tag, channel, stable_filter=stable_filter))
             or (behind > 0 and _head_contains_ref(path, latest_tag))
             or (behind > 0 and not _can_fast_forward_to(path, latest_tag))
         ):
@@ -1423,7 +1454,9 @@ def _check_repo_release(path, name, channel=DEFAULT_UPDATE_CHANNEL):
         return None
 
     latest_tag = tags[0]
-    current_tag = _current_release_tag(path, channel)
+    # One filter policy for the whole check, taken from this snapshot (#8684 gate).
+    stable_filter = _stable_filter_for_tags(tags)
+    current_tag = _current_release_tag(path, channel, stable_filter=stable_filter)
     behind = _release_gap(tags, current_tag, latest_tag)
 
     # When NO channel tag is reachable behind HEAD, _current_release_tag returns
@@ -1440,7 +1473,7 @@ def _check_repo_release(path, name, channel=DEFAULT_UPDATE_CHANNEL):
     # tag; may be refined below in the no-channel-tag-behind-HEAD fallback).
     current_sha_ref = current_tag
     if current_tag is None:
-        ahead = _count_channel_tags_ahead(path, channel)
+        ahead = _count_channel_tags_ahead(path, channel, stable_filter=stable_filter)
         if ahead > 0:
             behind = ahead
         # Scope the installed-version fallback to the WebUI repo only.
@@ -1489,7 +1522,7 @@ def _check_repo_release(path, name, channel=DEFAULT_UPDATE_CHANNEL):
     # origin/master (the firehose). Report up-to-date. The AGENT repo and the
     # experimental channel keep the historical fall-through.
     suppress_stable_fallthrough = (channel == 'stable' and name == 'webui')
-    if behind == 0 and _head_is_past_latest_tag(path, current_tag, channel):
+    if behind == 0 and _head_is_past_latest_tag(path, current_tag, channel, stable_filter=stable_filter):
         if suppress_stable_fallthrough:
             return _channel_up_to_date_info(path, name, channel, current_tag, latest_tag)
         return None
@@ -1809,7 +1842,7 @@ def _check_repo(path, name, channel=DEFAULT_UPDATE_CHANNEL):
     _tag_info = None
     if _tags:
         _latest = _tags[0]
-        _current = _current_release_tag(path, channel)
+        _current = _current_release_tag(path, channel, stable_filter=_stable_filter_for_tags(_tags))
         _tag_info = {'latest_tag': _latest, 'current_tag': _current}
 
     branch_info = _check_repo_branch(path, name, fetch=False)
