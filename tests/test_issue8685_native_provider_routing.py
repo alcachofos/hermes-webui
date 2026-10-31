@@ -95,3 +95,29 @@ def test_a_real_legacy_entry_still_wins_its_identity_over_a_native_one(monkeypat
     _bind(monkeypatch, data)
     entries = config._custom_provider_entries(data)
     assert [e["base_url"] for e in entries] == ["https://legacy-myprov.invalid/v1"]
+
+
+@pytest.mark.parametrize("field,value", [("model", 42), ("model", ["x"]), ("default_model", 42), ("model", "   ")])
+@pytest.mark.parametrize("legacy", ["absent", [], {}, [{"name": "other", "base_url": "https://other.invalid/v1"}]],
+                         ids=["no-key", "empty", "dict", "unrelated-entry"])
+def test_a_non_string_native_model_does_not_break_unrelated_routes(monkeypatch, field, value, legacy):
+    """Gate finding on b95e28fcc: ``providers.myprov.model: 42`` crashed resolution of an
+    unrelated ``@openai:...`` selector (``.strip()`` on an int) on exp-v0.52.597+ whenever the
+    native view was read. v0.52.544 and .596 resolve it; the legacy-shaped view now carries only
+    string model names."""
+    data = {"model": {"provider": "openai", "default": "other"},
+            "providers": {"myprov": {"base_url": NATIVE_URL, field: value}}}
+    if legacy != "absent":
+        data["custom_providers"] = legacy
+    _bind(monkeypatch, data)
+    assert config.resolve_model_provider("@openai:other") == ("other", "openai", None)
+    assert config.resolve_model_provider("other") == ("other", "openai", None)
+    native = [e for e in config._custom_provider_entries(data) if e.get("base_url") == NATIVE_URL]
+    assert [e["model"] for e in native] == [""]
+
+
+def test_a_string_native_default_model_is_still_the_view_model(monkeypatch):
+    data = {"model": {"provider": "openai", "default": "other"},
+            "providers": {"myprov": {"base_url": NATIVE_URL, "model": 42, "default_model": "my-default"}}}
+    _bind(monkeypatch, data)
+    assert [e["model"] for e in config._custom_provider_entries(data)] == ["my-default"]

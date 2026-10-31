@@ -1736,8 +1736,16 @@ def _custom_provider_entries(
         entry["name"] = identity if identity in native else key
         fallback_label = key if explicit_native else key.replace("-", " ").title()
         entry["display_name"] = str(record.get("name") or fallback_label).strip()
-        if not entry.get("model"):
-            entry["model"] = record.get("default_model") or ""
+        # Native records are hand-edited config; only a string names a default
+        # model in the legacy-shaped view. A non-string ``model`` / ``default_model``
+        # (``model: 42``) must not reach consumers that call ``.strip()`` on it:
+        # it crashed resolution for UNRELATED providers (@openai:...), which
+        # v0.52.544 resolved (#8685 gate).
+        model = entry.get("model")
+        if not isinstance(model, str) or not model.strip():
+            default_model = record.get("default_model")
+            model = default_model if isinstance(default_model, str) else ""
+        entry["model"] = model
         entries.append(entry)
     return entries
 

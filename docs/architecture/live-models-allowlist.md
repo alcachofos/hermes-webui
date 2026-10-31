@@ -27,8 +27,11 @@ Built-in and plugin provider settings remain separate. The generic
 bare settings such as `providers.groq: {}` retain their keyless Settings-card
 placeholder and sort behavior, without creating native connection authority.
 
-A missing `custom_providers` key permits native fallback. An explicitly empty
-or malformed legacy store suppresses that fallback; a non-empty legacy store
+A missing, explicitly empty or malformed `custom_providers` store has no
+legacy entries, so native providers are read exactly as with no legacy key
+(v0.52.544 listed and routed them; the Agent scans `providers:` before the
+legacy list, and its own remove-provider flow leaves `custom_providers: []`,
+#8685). A non-empty legacy store
 wins on overlapping identities while unrelated native entries remain visible.
 Disabled native entries are omitted. Among native records, an exact canonical
 `providers['custom:<slug>']` key outranks bare or normalized aliases regardless
@@ -104,7 +107,11 @@ bare mapping keys, active-provider values and persisted explicit inputs such as
 same owned endpoint with the complete model ID. An explicit historical hint
 may retain its bare spelling in the resolved triple; that does not make it a
 second identity newly advertised by the catalog. Built-in/plugin aliases keep
-their existing routing rules. The bare `custom` lane remains distinct: when it
+their existing routing rules: a bare built-in or plugin selector such as
+`openai` is claimed only by a legacy `custom_providers` entry of that name, as
+on v0.52.544. A native `providers['custom:openai']` record needs the explicit
+`custom:openai` selector and never takes over the built-in route, endpoint or
+key (#8685). The bare `custom` lane remains distinct: when it
 represents the configured default endpoint, a named provider cannot take its
 URL or credential, even if its name resembles an internal lane description.
 
