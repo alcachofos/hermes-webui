@@ -77,6 +77,8 @@
 
 ### Fixed
 
+- **The stable channel keeps v0.52.544's update target when a checkout has no stable release.** Since exp-v0.52.596, a checkout whose tags are all prereleases (for example `v0.22.5+canary.N`) had no release at all on the stable channel, so an Agent update could apply `origin/main` and a WebUI check could treat the branch tip as the target. The prerelease filter now applies only when the repository has at least one stable release tag, and each check or apply reads the tag list once and uses that one snapshot throughout. (#8686, fixes #8684)
+
 - Tests no longer leak provider state into the shared test environment: two onboarding tests applied a real setup on the test server, and the provider-key tests left API keys exported. With the real Agent installed, a local full-suite run failed `test_quiet_delegation_re_g2` and `test_ttl_cache` because of it. Tests only. (#8678, fixes #8677)
 
 - **During an in-place update, static files are no longer cached for a year under the old version's URL.** The update swaps the checkout before the old process restarts, so for that window the old process served next-revision files under its own `?v=` version and marked them `immutable` for a year, which could leave a browser with a mixed front-end (for example a new control without its CSS). While an update or restart is in progress, static files now get the normal 5-minute cache, and the year-long cache returns if the update fails. Thanks @happy5318. (#8670, refs #6992)
