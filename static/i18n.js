@@ -29911,6 +29911,10 @@ const LOCALES = {
     tree_symlink_aria: 'enllaç simbòlic',
     tree_row_aria: (name, kind, size) => size ? `${name} ${kind}, ${size}` : `${name} ${kind}`,
     workspace_tree_aria: 'Fitxers de l\'espai de treball',
+    update_force_active_runs: (n) => `Actualitza igualment (interromp ${n} ${Number(n) === 1 ? 'execució' : 'execucions'})`,
+    update_force_active_runs_title: 'Vols interrompre les execucions actives?',
+    update_force_active_runs_message: (n) => `${n} ${Number(n) === 1 ? 'execució de l\'agent WebUI està' : 'execucions de l\'agent WebUI estan'} en curs. Si actualitzes ara, el servidor es reiniciarà i ${Number(n) === 1 ? 'l\'execució s\'aturarà' : 's\'aturaran les execucions'}; ${Number(n) === 1 ? 'es desarà com a interrompuda' : 'cadascuna es desarà com a interrompuda'}. Si pots, espera que ${Number(n) === 1 ? 'acabi' : 'acabin'}.`,
+    update_force_active_runs_confirm: 'Interromp i actualitza',
   },
 
 };
