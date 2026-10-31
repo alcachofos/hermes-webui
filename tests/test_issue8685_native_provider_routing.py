@@ -121,3 +121,14 @@ def test_a_string_native_default_model_is_still_the_view_model(monkeypatch):
             "providers": {"myprov": {"base_url": NATIVE_URL, "model": 42, "default_model": "my-default"}}}
     _bind(monkeypatch, data)
     assert [e["model"] for e in config._custom_provider_entries(data)] == ["my-default"]
+
+
+def test_a_whitespace_native_model_falls_back_to_a_string_default_model(monkeypatch):
+    """Round-2 gate: a whitespace-only ``model`` is no model name, so a string ``default_model``
+    names the default (.600 kept the blank and emitted a ``@custom:myprov:   `` catalog row). The
+    Agent itself reads only ``default_model`` for keyed records."""
+    data = {"model": {"provider": "openai", "default": "other"},
+            "providers": {"myprov": {"base_url": NATIVE_URL, "model": "   ", "default_model": "d1"}}}
+    _bind(monkeypatch, data)
+    assert [e["model"] for e in config._custom_provider_entries(data)] == ["d1"]
+    assert config.resolve_model_provider("@openai:other") == ("other", "openai", None)

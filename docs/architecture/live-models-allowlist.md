@@ -109,9 +109,12 @@ may retain its bare spelling in the resolved triple; that does not make it a
 second identity newly advertised by the catalog. Built-in/plugin aliases keep
 their existing routing rules: a bare built-in or plugin selector such as
 `openai` is claimed only by a legacy `custom_providers` entry of that name, as
-on v0.52.544. A native `providers['custom:openai']` record needs the explicit
-`custom:openai` selector and never takes over the built-in route, endpoint or
-key (#8685). The bare `custom` lane remains distinct: when it
+on v0.52.544. In WebUI selector resolution, a native `providers['custom:openai']`
+record needs the explicit `custom:openai` selector and does not take over the
+bare built-in route (#8685). Downstream, the Agent's runtime resolver is
+order-dependent: with `custom:openai` listed before `openai`, the constructor
+bundle still pairs the named endpoint with the built-in key, as on v0.52.544
+(#8690). The bare `custom` lane remains distinct: when it
 represents the configured default endpoint, a named provider cannot take its
 URL or credential, even if its name resembles an internal lane description.
 

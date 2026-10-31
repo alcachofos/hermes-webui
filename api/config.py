@@ -1877,8 +1877,9 @@ def _named_custom_provider_slug_for_provider(
     # A bare built-in or plugin id (``openai``) is claimed only by a legacy
     # ``custom_providers`` entry of that name, as on v0.52.544. A native
     # ``providers['custom:openai']`` record needs the explicit ``custom:openai``
-    # selector; it never takes over the built-in route, its key or its
-    # endpoint (#8685).
+    # selector; WebUI selector resolution never hands it the bare built-in
+    # route (#8685). The Agent's own runtime resolution is order-dependent
+    # downstream of this (#8690).
     legacy_only = not raw.startswith("custom:") and not _is_native_custom_provider_key(raw)
     legacy_names = _legacy_custom_provider_names(config_obj) if legacy_only else set()
     for entry in _custom_provider_entries(config_obj):
