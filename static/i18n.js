@@ -30007,6 +30007,10 @@ const LOCALES = {
     update_force_active_runs_title: 'Vols interrompre les execucions actives?',
     update_force_active_runs_message: (n) => `${n} ${Number(n) === 1 ? 'execució de l\'agent WebUI està' : 'execucions de l\'agent WebUI estan'} en curs. Si actualitzes ara, el servidor es reiniciarà i ${Number(n) === 1 ? 'l\'execució s\'aturarà' : 's\'aturaran les execucions'}; ${Number(n) === 1 ? 'es desarà com a interrompuda' : 'cadascuna es desarà com a interrompuda'}. Si pots, espera que ${Number(n) === 1 ? 'acabi' : 'acabin'}.`,
     update_force_active_runs_confirm: 'Interromp i actualitza',
+    memory_off_agent_outdated: 'La memòria està desactivada: aquesta versió de Hermes Agent no pot mantenir separada la memòria de cada perfil. Actualitza Hermes Agent per tornar-la a activar.',
+    memory_off_agent_no_instance_claim: 'Els proveïdors de memòria estan desactivats: aquesta versió de Hermes Agent no pot mantenir-los separats entre perfils. La memòria integrada continua funcionant. Actualitza Hermes Agent per tornar-los a activar.',
+    memory_off_provider_shared_instance: 'El teu proveïdor de memòria està desactivat per a aquest perfil perquè un altre perfil ja l\'està utilitzant. La memòria integrada continua funcionant. Reinicia el WebUI o actualitza el proveïdor (per exemple, mnemosyne-hermes 0.7.2 o posterior).',
+    memory_off_notice_dismiss: 'Descarta l\'avís de memòria',
   },
 
 };
