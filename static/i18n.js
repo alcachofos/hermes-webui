@@ -28608,6 +28608,7 @@ const LOCALES = {
     workspace_close_preview: 'Tanca la previsualització',
     workspace_files_tab: 'Fitxers',
     workspace_artifacts_tab: 'Artefactes',
+    workspace_artifact_files_changed: 'Fitxers modificats',
     workspace_hidden_files_visible: 'fitxers ocults visibles',
     workspace_hidden_files_visible_title: 'Els fitxers ocults són visibles — fes clic per veure les opcions',
     workspace_options: 'Opcions de l\'espai de treball',
