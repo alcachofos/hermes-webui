@@ -63,7 +63,8 @@ from api.config import (
     warm_models_catalog_provenance_if_cold,
     load_settings,
     parse_reasoning_effort,
-    coerce_reasoning_effort_for_model,
+    resolve_session_reasoning_effort,
+    effective_session_reasoning_effort,
     _main_model_request_overrides,
     PROCESS_SESSION_INDEX, PROCESS_SESSION_INDEX_LOCK,
 )
@@ -86,6 +87,8 @@ from api.memory_profile_scope import (
     agent_has_memory,
     call_as_session_owner,
     construct_profile_scoped_agent,
+    memory_status_event,
+    session_memory_status,
     session_profile_home_or_empty,
     turn_memory_reason,
 )
@@ -189,6 +192,16 @@ def _session_payload_with_full_messages(session, *, tool_calls=None):
         'message_count': len(messages),
     }
     attach_todo_state(raw, messages)
+    # #8517 notice: the memory status of the agent serving THIS session (after a
+    # compression, the continuation and the cached agent moved to it). Omitted when
+    # unknown; codes only.
+    try:
+        _memory_status = session_memory_status(getattr(session, 'session_id', ''), session=session)
+    except Exception:
+        _memory_status = None
+        logger.debug('[webui] #8517: memory status unavailable for the session payload', exc_info=True)
+    if _memory_status:
+        raw['memory_status'] = _memory_status
     if tool_calls is not None:
         raw['tool_calls'] = tool_calls
     try:
@@ -390,6 +403,24 @@ def _ephemeral_session_payload(session_id: str, messages) -> dict:
     return redact_session_data(
         {'session_id': session_id, 'messages': messages if isinstance(messages, list) else []}
     )
+
+
+def _put_session_memory_status(put, session_id: str, stream_id: str, profile_home: str) -> None:
+    """#8517 notice: send the UI the memory status of the agent now serving
+    ``session_id`` (``warning``/``memory_off`` or ``memory_status``/``ok``; nothing when
+    unknown). Called after an agent is registered for the turn, including each
+    credential self-heal replacement, outside the registry locks. A one-turn
+    memoryless agent is never cached, so it never changes the reported status."""
+    try:
+        event = memory_status_event(
+            session_memory_status(session_id, profile_home),
+            session_id=session_id, stream_id=stream_id,
+        )
+    except Exception:
+        logger.debug('[webui] #8517: memory status unavailable for session %s', session_id, exc_info=True)
+        return
+    if event is not None:
+        put(*event)
 
 
 def _cancel_event_payload(
@@ -15696,6 +15727,7 @@ def _run_agent_streaming(
 
             # Per-session toolset override (#493): if the session has
             # enabled_toolsets set, use that instead of the global config.
+            _session_meta = None
             try:
                 from api.models import Session, SESSION_DIR
                 _session_path = SESSION_DIR / f"{session_id}.json"
@@ -15807,16 +15839,25 @@ def _run_agent_streaming(
             except Exception:
                 _max_tokens_cfg = None
 
-            # CLI-parity reasoning effort: read agent.reasoning_effort from the
-            # active profile's config.yaml (the same key the CLI writes via
-            # `/reasoning <level>`) and hand the parsed dict to AIAgent.  When
-            # the key is absent or invalid, pass None → agent uses its default.
+            # Prefer the session-owned effort so switching conversations restores
+            # the same runtime setting shown by the composer. Legacy sessions
+            # without that metadata continue to inherit the profile/CLI value,
+            # read from the same isolated session-profile config as the chip
+            # and the Gateway worker (_cfg stays ambient-aware for toolsets).
+            # The live session `s` is what POST /api/reasoning mutates and what
+            # the Gateway worker reads.
             try:
-                _effort_cfg = _cfg.get('agent', {}) if isinstance(_cfg, dict) else {}
-                _effort_raw = _effort_cfg.get('reasoning_effort') if isinstance(_effort_cfg, dict) else None
-                _effort = coerce_reasoning_effort_for_model(
-                    _effort_raw,
-                    resolved_model,
+                _session_effort = getattr(s, 'reasoning_effort', None)
+                try:
+                    _session_effort = effective_session_reasoning_effort(
+                        _session_effort, _profile_home,
+                    )
+                except Exception:
+                    logger.warning("isolated reasoning config read failed; using session config", exc_info=True)
+                _effort = resolve_session_reasoning_effort(
+                    _cfg,
+                    session_effort=_session_effort,
+                    model_id=resolved_model,
                     provider_id=resolved_provider,
                     base_url=resolved_base_url,
                 )
@@ -16037,6 +16078,8 @@ def _run_agent_streaming(
                     _finalize_cancelled_turn(s, ephemeral=ephemeral, message='Task cancelled before start.', stream_id=stream_id)
                 put('cancel', _cancel_event_payload('Cancelled by user'))
                 return
+            if not ephemeral:
+                _put_session_memory_status(put, session_id, stream_id, _profile_home)
 
             # Cache publication is already fenced with Stop above. Keep LRU
             # eviction and any memory-provider close outside the stream lock.
@@ -16900,6 +16943,9 @@ def _run_agent_streaming(
                                 _finalize_cancelled_turn(s, ephemeral=ephemeral, message='Task cancelled before start.', stream_id=stream_id)
                                 put('cancel', _cancel_event_payload('Cancelled by user'))
                                 return
+                            if not ephemeral:
+                                # #8517 notice: the replacement now serves the session.
+                                _put_session_memory_status(put, session_id, stream_id, _profile_home)
                             # Retry the conversation once with fresh credentials
                             _self_healed = True
                             _token_sent = False
@@ -18440,6 +18486,9 @@ def _run_agent_streaming(
                             _finalize_cancelled_turn(s, ephemeral=ephemeral, message='Task cancelled before start.', stream_id=stream_id)
                         put('cancel', _cancel_event_payload('Cancelled by user'))
                         return
+                    if not ephemeral:
+                        # #8517 notice: the replacement now serves the session.
+                        _put_session_memory_status(put, session_id, stream_id, _profile_home)
                     # Retry the conversation
                     _token_sent = False
                     try:

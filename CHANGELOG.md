@@ -5,6 +5,8 @@
 
 ### Added
 
+- **A notice shows when memory is off for the agent serving the chat.** When memory can't be kept inside one profile, the Agent runs with memory (or just its external provider) switched off, and before this the only trace was a server log line. A dismissible notice above the composer now says which case applies (an Agent too old to scope memory per profile, an Agent that can't claim a provider per profile, or a provider already used by another profile) and how to turn memory back on. Healthy and read-only sessions show nothing. (#8652, refs #8517)
+
 - **Usage quotas for OpenCode Go and Command Code.** Settings > Providers shows their usage, limits and reset times on the quota card, read from each provider's usage API (sanitized to the card's existing window format), and reports a definitive failure, such as an invalid key, instead of the credential pool. Thanks @droopanu. (#7883)
 
 - **Opt-in Screen reader mode, enabled for the terminal.** A Settings toggle (also found by Settings search) makes the terminal readable by screen readers. Off by default. Thanks @grzezlo. (#8305)
@@ -74,6 +76,16 @@
   exactly as before. Thanks @ybai08. (#8138, fixes #8126)
 
 ### Fixed
+
+- **Reasoning effort is remembered per chat (#2697).** The reasoning chip now restores each conversation's own effort: chat A on High and chat B on Low stay that way across switching and reload, while a pick still sets the profile default for new chats. Overlapping saves can no longer roll back an accepted pick, an unreadable session file fails closed instead of being treated as empty, CLI chats keep their source, and the effort now reaches a Hermes Gateway in the request options it reads (previously only the top-level key was sent, which the Gateway ignored). Salvage of #7881 by @Notaloop763, thanks for the original work. (#8253)
+
+- **Internal (test reliability): the gateway routing footer test runs its node harness from a file.** It passed its whole script (about 128 KB, mostly the real `renderMessages()`) to node as one command-line argument, only about 2.5 KB under Linux's 128 KiB per-argument limit, so a routine change to `renderMessages()` would have made the file fail with "Argument list too long" instead of testing anything. The script now goes through a temporary file; the same code runs and no assertion changed. Thanks @happy5318. (#8659)
+
+- **Custom providers configured in the Agent's native `providers:` mapping show up in WebUI.** WebUI only read the legacy `custom_providers:` list, so a native-only setup had no provider cards, no model group and no live fallback. Native entries now appear in Settings > Providers and the model picker under their own route ID (renaming the label no longer changes it), and two routes that share one gateway URL keep their own key and context instead of borrowing each other's. Thanks @Jmars321. (#8448, closes #8428)
+
+- **The Agent update check finds the real latest stable release after the release series rename.** Stable tags were ordered by name, so the legacy `v2026.9.x` series outranked `v0.21.x`, the check resolved to an ancestor of the install, and it fell back to a branch comparison that reported hundreds of updates on an up-to-date install. Stable tags are now ordered by release series (the current series above the legacy one) and by version number, and canary or other prerelease tags (`+canary...`, `-rc...`) no longer count as stable releases or as the installed version. Thanks @webtecnica. (#8147)
+
+- **Approval cards from a Gateway with session authority settle again on the default chat stream.** On the default `/v1/chat/completions` path (`HERMES_WEBUI_GATEWAY_USE_RUNS_API` unset), Allow and Deny on an approval card were relayed with the legacy body, a generation-fenced Gateway answered `400 invalid_params`, and the run stayed parked until the approval timeout (300 s) denied it. The card now carries the same creation-time identity decision as the Runs API path, so the click is sent with the Gateway's own request id and execution generation; Gateways without that identity still get the legacy body, and a locally generated fallback id is never treated as the Gateway's. Thanks @happy5318. (#8602, refs #8579)
 
 - **A refused memory commit is no longer counted as done when logging is turned down (#8613).** WebUI learned that the Agent refused a session-end memory hook only from the Agent's warning log line, so raising the log level, disabling the logger or calling `logging.disable()` hid the refusal and the pending commit was dropped as if it had been saved. WebUI now notices the refusal at the Agent's refusal function itself, without changing any logger, and keeps the work pending. `docs/troubleshooting.md` explains the three #8517 memory warnings and the one remaining limitation (an evicted agent whose owner cannot be resolved keeps its memory provider running until restart). (#8640)
 
