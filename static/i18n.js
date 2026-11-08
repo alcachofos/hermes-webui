@@ -28759,7 +28759,7 @@ const LOCALES = {
     uploading: 'Pujant…',
     uploaded: 'Pujat',
     all_uploads_failed: (n) => Number(n) === 1 ? `Ha fallat la pujada de ${n} fitxer` : `Han fallat les pujades dels ${n} fitxers`,
-    archive_extracted: (n, c) => `${Number(n) === 1 ? 'S'ha extret' : 'S'han extret'} ${n} ${Number(n) === 1 ? 'fitxer' : 'fitxers'} de ${c} ${Number(c) === 1 ? 'fitxer comprimit' : 'fitxers comprimits'}`,
+    archive_extracted: (n, c) => `${Number(n) === 1 ? 'S\'ha extret' : 'S\'han extret'} ${n} ${Number(n) === 1 ? 'fitxer' : 'fitxers'} de ${c} ${Number(c) === 1 ? 'fitxer comprimit' : 'fitxers comprimits'}`,
     session_pin: 'Fixa la conversa',
     session_unpin: 'Deixa de fixar la conversa',
     session_pin_desc: 'Mantén aquesta conversa al capdamunt de la llista',
