@@ -30,6 +30,21 @@ from api.helpers import bad, j
 from api.workspace import resolve_trusted_workspace
 
 BOARD_COLUMNS = ["triage", "todo", "scheduled", "ready", "running", "blocked", "done"]
+
+# ── Simple view: a read-only five-column projection of the same card list ─────
+# The full board (BOARD_COLUMNS) stays the default payload; the simple view is
+# opt-in via ?view=simple and never writes: grouping is a pure function over the
+# card dicts the board payload already built.
+SIMPLE_VIEW_COLUMNS = ["needs_you", "working", "queued", "done", "inbox"]
+
+# The Done column only shows the most recent finished cards.
+SIMPLE_VIEW_DONE_LIMIT = 25
+
+# Statuses the simple view places explicitly; anything else is a fallback.
+_SIMPLE_QUEUED_STATUSES = frozenset({"todo", "ready", "scheduled"})
+_SIMPLE_KNOWN_STATUSES = frozenset(
+    {"triage", "todo", "scheduled", "ready", "running", "review", "blocked", "done"}
+)
 _TASK_PREFIX = "/api/kanban/tasks/"
 
 
@@ -203,6 +218,113 @@ def _comment_counts(conn):
     return {row["task_id"]: int(row["n"] or 0) for row in rows}
 
 
+def _card_field(card, name, default=None):
+    """Read one field from a card dict (bridge rows) or from a task object."""
+    if isinstance(card, dict):
+        return card.get(name, default)
+    return getattr(card, name, default)
+
+
+def _simple_column_for(card) -> str:
+    """Return the single simple-view column a card belongs to.
+
+    Total by construction, so every card lands in exactly one column:
+
+    - ``needs_you``: ``status='blocked'`` and ``block_kind='needs_input'``
+    - ``working``:   ``status`` in (running, review)
+    - ``queued``:    ``status`` in (todo, ready, scheduled), every other
+      ``blocked`` row (transient / dependency / capability / NULL), and any
+      status this function does not know (fallback)
+    - ``done``:      ``status='done'``
+    - ``inbox``:     ``status='triage'``
+    """
+    status = str(_card_field(card, "status", "") or "").strip().lower()
+    if status == "blocked":
+        kind = str(_card_field(card, "block_kind", "") or "").strip().lower()
+        return "needs_you" if kind == "needs_input" else "queued"
+    if status in ("running", "review"):
+        return "working"
+    if status in _SIMPLE_QUEUED_STATUSES:
+        return "queued"
+    if status == "done":
+        return "done"
+    if status == "triage":
+        return "inbox"
+    # Fallback: an unknown or future status still lands in exactly one column.
+    return "queued"
+
+
+def _simple_badge(card):
+    """Badge text for a queued card, or None when it needs no badge.
+
+    A non-``needs_input`` block shows its ``block_kind``; a NULL/blank kind
+    shows ``unknown``. Cards in the fallback bucket are ``unknown`` too.
+    """
+    status = str(_card_field(card, "status", "") or "").strip().lower()
+    if status == "blocked":
+        kind = str(_card_field(card, "block_kind", "") or "").strip().lower()
+        if kind == "needs_input":
+            return None
+        return kind or "unknown"
+    if status not in _SIMPLE_KNOWN_STATUSES:
+        return "unknown"
+    return None
+
+
+def _card_sort_time(card) -> float:
+    """Best-effort epoch timestamp for ordering (completed, then created)."""
+    for field in ("completed_at", "created_at"):
+        value = _card_field(card, field)
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def group_simple(cards):
+    """Group cards into the five simple-view columns.
+
+    Pure and read-only: it only inspects the card dicts the board payload
+    already built and never opens or writes the database. Every card lands in
+    exactly one column. A card that needs a badge is copied before the
+    ``simple_badge`` key is attached, so the caller's dicts are untouched.
+
+    Returns ``{column_name: [cards]}`` for every name in
+    ``SIMPLE_VIEW_COLUMNS``, in that order. ``done`` is newest-first and capped
+    at ``SIMPLE_VIEW_DONE_LIMIT``.
+    """
+    groups = {name: [] for name in SIMPLE_VIEW_COLUMNS}
+    for card in cards or []:
+        column = _simple_column_for(card)
+        badge = _simple_badge(card)
+        if badge is not None:
+            data = dict(card) if isinstance(card, dict) else dict(_obj_dict(card) or {})
+            data["simple_badge"] = badge
+            card = data
+        groups[column].append(card)
+    groups["done"].sort(key=_card_sort_time, reverse=True)
+    groups["done"] = groups["done"][:SIMPLE_VIEW_DONE_LIMIT]
+    return groups
+
+
+def simple_view_payload(cards, **extra):
+    """Build the simple-view board payload: five groups, each with a count."""
+    groups = group_simple(cards)
+    payload = {
+        "view": "simple",
+        "columns": [
+            {"name": name, "count": len(groups[name]), "tasks": groups[name]}
+            for name in SIMPLE_VIEW_COLUMNS
+        ],
+        "counts": {name: len(groups[name]) for name in SIMPLE_VIEW_COLUMNS},
+    }
+    payload.update(extra)
+    return payload
+
+
 def _board_payload(parsed):
     """Build the full board JSON payload: kanban columns with tasks, filter state, and latest_event_id."""
     board = _resolve_board(parsed)
@@ -212,6 +334,7 @@ def _board_payload(parsed):
     include_archived = _bool_query(parsed, "include_archived", False)
     only_mine = _bool_query(parsed, "only_mine", False)
     since = _int_query(parsed, "since", None, minimum=0)
+    view = (_str_query(parsed, "view") or "").strip().lower()
     profile = None
     if only_mine and not assignee:
         try:
@@ -241,6 +364,26 @@ def _board_payload(parsed):
             data["link_counts"] = link_counts.get(task.id, {"parents": 0, "children": 0})
             data["comment_count"] = comment_counts.get(task.id, 0)
             return data
+
+        if view == "simple":
+            # Same cards, same order the full board uses; only the projection
+            # changes. Nothing is written: see group_simple().
+            return simple_view_payload(
+                [row(task) for task in tasks],
+                tenants=sorted({task.tenant for task in tasks if getattr(task, "tenant", None)}),
+                assignees=sorted({task.assignee for task in tasks if getattr(task, "assignee", None)}),
+                latest_event_id=latest_event_id,
+                changed=True,
+                read_only=False,
+                filters={
+                    "tenant": tenant,
+                    "assignee": assignee,
+                    "include_archived": include_archived,
+                    "only_mine": only_mine,
+                    "profile": profile,
+                    "view": "simple",
+                },
+            )
 
         columns = [
             {"name": name, "tasks": [row(task) for task in tasks if task.status == name]}
