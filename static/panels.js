@@ -19,6 +19,11 @@ let _kanbanSuppressCardClickUntil = 0;
 // EventSource fails to connect (proxy that strips text/event-stream, etc).
 let _kanbanEventSource = null;
 let _kanbanEventSourceFailures = 0;
+// Simple (default) vs full board view. Persisted in localStorage; a
+// `?view=simple` / `?view=full` URL parameter wins as a shareable override.
+const KANBAN_VIEW_STORAGE_KEY = 'hermes-webui.view';
+let _kanbanSimpleView = true;
+let _kanbanViewInitialised = false;
 let _skillsData = null; // cached skills list
 let _cronList = null; // cached cron jobs (array)
 let _currentCronDetail = null; // full cron job object
@@ -2420,6 +2425,68 @@ async function toggleKanbanViewMode(){
   }
 }
 
+function _kanbanUrlView(){
+  try {
+    const raw = new URLSearchParams(window.location.search).get('view');
+    const value = String(raw || '').trim().toLowerCase();
+    return (value === 'simple' || value === 'full') ? value : '';
+  } catch(_) { return ''; }
+}
+
+function _kanbanStoredView(){
+  try {
+    const raw = String(localStorage.getItem(KANBAN_VIEW_STORAGE_KEY) || '').trim().toLowerCase();
+    return (raw === 'simple' || raw === 'full') ? raw : '';
+  } catch(_) { return ''; }
+}
+
+function _kanbanResolveView(){
+  // URL first (shareable override), then the stored choice, then the default.
+  return _kanbanUrlView() || _kanbanStoredView() || 'simple';
+}
+
+function _kanbanInitView(){
+  if (_kanbanViewInitialised) return;
+  _kanbanViewInitialised = true;
+  _kanbanSimpleView = _kanbanResolveView() !== 'full';
+  syncKanbanSimpleViewToggle();
+}
+
+function syncKanbanSimpleViewToggle(){
+  const btn = $('btnKanbanSimpleViewToggle');
+  if (!btn) return;
+  const label = t(_kanbanSimpleView ? 'kanban_full_view' : 'kanban_simple_view');
+  btn.setAttribute('aria-pressed', _kanbanSimpleView ? 'true' : 'false');
+  btn.setAttribute('aria-label', label);
+  if (typeof _setButtonTooltip === 'function') _setButtonTooltip(btn, label);
+  else btn.setAttribute('data-tooltip', label);
+}
+
+function _kanbanWriteUrlView(view){
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('view', view);
+    window.history.replaceState({}, '', url.toString());
+  } catch(_) {}
+}
+
+function toggleKanbanSimpleView(){
+  _kanbanSimpleView = !_kanbanSimpleView;
+  const view = _kanbanSimpleView ? 'simple' : 'full';
+  try { localStorage.setItem(KANBAN_VIEW_STORAGE_KEY, view); } catch(_) {}
+  _kanbanWriteUrlView(view);
+  syncKanbanSimpleViewToggle();
+  showToast(t('kanban_view_saved'));
+  loadKanban(true);
+}
+
+const KANBAN_SIMPLE_LABELS = {needs_you: 'Needs you', working: 'Working', queued: 'Queued', done: 'Done', inbox: 'Inbox'};
+function _kanbanSimpleColumnLabel(name){
+  const key = 'kanban_simple_' + name;
+  const translated = t(key);
+  return (translated && translated !== key) ? translated : (KANBAN_SIMPLE_LABELS[name] || name);
+}
+
 function _kanbanSetSelectOptions(el, values, allLabelKey){
   if (!el) return;
   const current = el.value || el.dataset.defaultValue || '';
@@ -2767,6 +2834,22 @@ function _kanbanRenderColumn(col){
     </section>`;
 }
 
+function _kanbanRenderSimpleColumn(col){
+  const tasks = col.tasks || [];
+  const declared = (col.count === undefined || col.count === null) ? tasks.length : col.count;
+  // Read-only column: no drop handlers, no drag, no quick actions. Clicking a
+  // card still opens its detail panel.
+  return `<section class="kanban-column kanban-simple-column" data-simple-column="${esc(col.name)}" data-kanban-count="${esc(String(declared))}">
+      <div class="kanban-column-head">
+        <span>${esc(_kanbanSimpleColumnLabel(col.name))}</span>
+        <span class="kanban-count">${tasks.length}</span>
+      </div>
+      <div class="kanban-column-body">
+        ${tasks.length ? tasks.map(task => _kanbanCard(task, task.status || '', {readonly: true})).join('') : `<div class="kanban-empty">${esc(t('kanban_empty'))}</div>`}
+      </div>
+    </section>`;
+}
+
 function _kanbanRenderProfileLanes(columns){
   const lanes = _kanbanLaneNames(columns);
   if (!lanes.length) return columns.map(_kanbanRenderColumn).join('');
@@ -2807,15 +2890,19 @@ function _kanbanRenderBoard(){
   const total = columns.reduce((n, col) => n + (col.tasks || []).length, 0);
   if ($('kanbanSummary')) $('kanbanSummary').textContent = String(t('kanban_visible_tasks')).replace('{0}', total);
   _kanbanRenderSidebar(columns);
+  const simple = _kanbanSimpleView && _kanbanBoard && _kanbanBoard.view === 'simple';
+  board.classList.toggle('kanban-board-simple', simple);
   if (total === 0) {
     const unfilteredTotal = (_kanbanBoard.columns || []).reduce((n, col) => n + (col.tasks || []).length, 0);
     board.innerHTML = unfilteredTotal > 0 ? _kanbanHiddenByFiltersHtml() : _kanbanEmptyBoardHtml();
     return;
   }
+  if (simple) { board.innerHTML = columns.map(_kanbanRenderSimpleColumn).join(''); return; }
   board.innerHTML = _kanbanLanesByProfile ? _kanbanRenderProfileLanes(columns) : columns.map(_kanbanRenderColumn).join('');
 }
 
-function _kanbanCard(task, status){
+function _kanbanCard(task, status, opts){
+  const readonly = !!(opts && opts.readonly);
   const priority = Number(task.priority || 0);
   const links = task.link_counts || {};
   const linkTotal = Number(links.parents || 0) + Number(links.children || 0);
@@ -2824,12 +2911,12 @@ function _kanbanCard(task, status){
   const stale = _kanbanCardStalenessClass(task);
   const body = _kanbanTaskBody(task);
   const assignee = task.assignee ? `<span class="kanban-card-assignee">@${esc(task.assignee)}</span>` : `<span class="kanban-card-unassigned">${esc(t('kanban_unassigned'))}</span>`;
-  return `<article class="kanban-card ${esc(stale)}" data-kanban-task-id="${esc(task.id)}" draggable="true" ondragstart="dragKanbanTask(event, ${jsArg(task.id)})" ondragend="finishKanbanDrag(event)" onclick="return openKanbanCard(event, ${jsArg(task.id)})" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();loadKanbanTask(${jsArg(task.id)})}">
-    <div class="kanban-card-topline"><span class="kanban-card-id">${esc(task.id || '')}</span>${priority ? `<span class="kanban-badge priority">P${priority}</span>` : ''}${task.tenant ? `<span class="kanban-badge tenant">${esc(task.tenant)}</span>` : ''}</div>
+  return `<article class="kanban-card ${esc(stale)}" data-kanban-task-id="${esc(task.id)}" ${readonly ? '' : `draggable="true" ondragstart="dragKanbanTask(event, ${jsArg(task.id)})" ondragend="finishKanbanDrag(event)"`} onclick="return openKanbanCard(event, ${jsArg(task.id)})" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();loadKanbanTask(${jsArg(task.id)})}">
+    <div class="kanban-card-topline"><span class="kanban-card-id">${esc(task.id || '')}</span>${readonly && task.simple_badge ? `<span class="kanban-badge simple-kind">${esc(task.simple_badge)}</span>` : ''}${priority ? `<span class="kanban-badge priority">P${priority}</span>` : ''}${task.tenant ? `<span class="kanban-badge tenant">${esc(task.tenant)}</span>` : ''}</div>
     <div class="kanban-card-title">${esc(_kanbanTaskTitle(task))}</div>
     ${body ? `<div class="kanban-card-body">${_kanbanRenderMarkdown(body)}</div>` : ''}
     <div class="kanban-card-meta">${assignee}${comments ? `<span class="kanban-card-metric">💬 ${comments}</span>` : ''}${linkTotal ? `<span class="kanban-card-metric">↔ ${linkTotal}</span>` : ''}${age ? `<span class="kanban-card-age">${esc(age)}</span>` : ''}</div>
-    ${_kanbanCardQuickActions(task)}
+    ${readonly ? '' : _kanbanCardQuickActions(task)}
   </article>`;
 }
 
@@ -2942,6 +3029,7 @@ function _kanbanUnavailableHtml(err){
 }
 
 async function loadKanban(animate){
+  _kanbanInitView();
   const board = $('kanbanBoard');
   const list = $('kanbanList');
   try {
@@ -2960,6 +3048,7 @@ async function loadKanban(animate){
     if (filters.tenant) params.set('tenant', filters.tenant);
     if (filters.includeArchived) params.set('include_archived', '1');
     if (filters.onlyMine) params.set('only_mine', '1');
+    params.set('view', _kanbanSimpleView ? 'simple' : 'full');
     if (_kanbanCurrentBoard) params.set('board', _kanbanCurrentBoard);
     const path = '/api/kanban/board' + (params.toString() ? '?' + params.toString() : '');
     const data = await api(path);
